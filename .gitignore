@@ -1,0 +1,8 @@
+**/.streamlit/secrets.toml
+.venv/
+__pycache__/
+*.pyc
+*.db
+shared/latex_imgs/
+shared/pdf_files/
+idea/
