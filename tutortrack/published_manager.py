@@ -6,6 +6,24 @@ from shared.published_db import (
     update_published_item,
     delete_published_item
 )
+from shared.content_renderer import render_published_content
+
+@st.dialog("👁 Preview Published Item", width="large")
+def open_preview_dialog(item_id):
+    item = get_published_item_full(item_id)
+
+    if not item:
+        st.error("Item not found.")
+        return
+
+    _, title, subject, grade, ctype, content, created, updated, visible = item
+
+    st.subheader(title)
+    st.caption(f"{subject} • Grade {grade} • {ctype}")
+
+    st.divider()
+
+    render_published_content(content)
 
 @st.dialog("✏️ Edit Published Item")
 def open_edit_dialog(item_id):
@@ -56,7 +74,8 @@ def show_published_manager():
         "id", "title", "subject", "grade", "type", "created", "updated", "visible"
     ])
 
-    df.insert(0, "Edit", False)
+    df.insert(0, "Preview", False)
+    df.insert(1, "Edit", False)
     df.insert(1, "Delete", False)
 
     # Display table
@@ -65,6 +84,7 @@ def show_published_manager():
         hide_index=True,
         height=500,
         column_config={
+            "Preview": st.column_config.CheckboxColumn("Preview"),
             "Edit": st.column_config.CheckboxColumn("Edit"),
             "Delete": st.column_config.CheckboxColumn("Delete"),
             "id": st.column_config.NumberColumn("ID"),
@@ -74,6 +94,9 @@ def show_published_manager():
     # Handle actions
     for i, row in edited.iterrows():
         item_id = int(row["id"])
+
+        if row["Preview"]:
+            open_preview_dialog(item_id)
 
         if row["Edit"]:
             open_edit_dialog(item_id)

@@ -310,6 +310,54 @@ def missing_vars(prompt: str, values: dict):
     missing = [v for v in sorted(needed) if v not in values or values[v] in (None, "", [])]
     return missing
 
+def validate_questions_schema(obj: dict):
+    """
+    Validates the worksheet JSON schema.
+    Raises ValueError if invalid.
+    """
+
+    if not isinstance(obj, dict):
+        raise ValueError("Root must be a JSON object")
+
+    if obj.get("type") != "questions":
+        raise ValueError("Root must contain: type='questions'")
+
+    if "title" not in obj or not isinstance(obj["title"], str):
+        raise ValueError("Missing or invalid 'title'")
+
+    if "questions" not in obj or not isinstance(obj["questions"], list):
+        raise ValueError("Missing or invalid 'questions' list")
+
+    if not obj["questions"]:
+        raise ValueError("Questions list is empty")
+
+    for i, q in enumerate(obj["questions"], start=1):
+        if not isinstance(q, dict):
+            raise ValueError(f"Question {i} is not an object")
+
+        if q.get("qtype") != "mcq":
+            raise ValueError(f"Question {i}: qtype must be 'mcq'")
+
+        if not isinstance(q.get("prompt"), str):
+            raise ValueError(f"Question {i}: missing or invalid prompt")
+
+        choices = q.get("choices")
+        if not isinstance(choices, list) or len(choices) != 4:
+            raise ValueError(f"Question {i}: must have exactly 4 choices")
+
+        if not all(isinstance(c, str) for c in choices):
+            raise ValueError(f"Question {i}: all choices must be strings")
+
+        ci = q.get("correct_index")
+        if not isinstance(ci, int) or not (0 <= ci <= 3):
+            raise ValueError(f"Question {i}: correct_index must be 0..3")
+
+def template_expects_json(tpl_system_prompt: str) -> bool:
+    if not tpl_system_prompt:
+        return False
+    s = tpl_system_prompt.lower()
+    return "json" in s and "only" in s
+
 def template_ui_new():
     rows = list_templates()
     if not rows:
@@ -451,7 +499,7 @@ def publish_dialog():
         if isinstance(ss.last_response, (dict, list)):
             st.json(ss.last_response)
         else:
-            st.markdown(ss.last_response)
+            st.markdown(translate_latex(ss.last_response))
 
     c1, c2 = st.columns(2)
 
@@ -686,8 +734,41 @@ if ss.pending_prompt:
         response_container.markdown(translate_latex(response))
 
     ss.messages.append({"role": "assistant", "content": response})
+
+    expects_json = template_expects_json(ss.template_system)
+
+    # Default: treat as normal text
     ss.last_response = response
 
+    if expects_json:
+        json_ok = True
+
+        # ---------- TRY PARSE ----------
+        try:
+            parsed = json.loads(response)
+        except Exception as e:
+            st.error("❌ Model did not return valid JSON.")
+            st.code(response)
+            ss.last_response = None
+            json_ok = False
+
+        # ---------- TRY SCHEMA ----------
+        if json_ok:
+            try:
+                if isinstance(parsed, dict) and parsed.get("type") == "questions":
+                    validate_questions_schema(parsed)
+            except Exception as e:
+                st.error(f"❌ JSON schema invalid: {e}")
+                st.json(parsed)
+                ss.last_response = None
+                json_ok = False
+
+        # ---------- SUCCESS ----------
+        if json_ok:
+            ss.last_response = parsed
+            st.success("✅ Valid worksheet JSON generated.")
+
+    # Clear template overrides
     ss.template_system = None
     ss.template_params = None
     ss.template_model = None

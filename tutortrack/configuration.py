@@ -69,28 +69,54 @@ def upsert_chattemplate(tpl: dict):
 
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO ChatTemplates
-        (title, category, model, system_prompt, user_prompt, fields_json, params_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(title) DO UPDATE SET
-            category=excluded.category,
-            model=excluded.model,
-            system_prompt=excluded.system_prompt,
-            user_prompt=excluded.user_prompt,
-            fields_json=excluded.fields_json,
-            params_json=excluded.params_json,
-            updated_at=excluded.updated_at
-    """, (
-        tpl["title"].strip(),
-        tpl.get("category"),
-        tpl["model"].strip(),
-        tpl["system_prompt"],
-        tpl["user_prompt"],
-        json.dumps(tpl["fields"], ensure_ascii=False),
-        json.dumps(tpl["params"], ensure_ascii=False),
-        now
-    ))
+
+    if tpl.get("id"):
+        # -----------------------------
+        # UPDATE existing template
+        # -----------------------------
+        cur.execute("""
+            UPDATE ChatTemplates
+            SET
+                title = ?,
+                category = ?,
+                model = ?,
+                system_prompt = ?,
+                user_prompt = ?,
+                fields_json = ?,
+                params_json = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (
+            tpl["title"].strip(),
+            tpl.get("category"),
+            tpl["model"].strip(),
+            tpl["system_prompt"],
+            tpl["user_prompt"],
+            json.dumps(tpl.get("fields") or [], ensure_ascii=False),
+            json.dumps(tpl.get("params") or {}, ensure_ascii=False),
+            now,
+            tpl["id"],
+        ))
+
+    else:
+        # -----------------------------
+        # INSERT new template
+        # -----------------------------
+        cur.execute("""
+            INSERT INTO ChatTemplates
+            (title, category, model, system_prompt, user_prompt, fields_json, params_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            tpl["title"].strip(),
+            tpl.get("category"),
+            tpl["model"].strip(),
+            tpl["system_prompt"],
+            tpl["user_prompt"],
+            json.dumps(tpl["fields"], ensure_ascii=False),
+            json.dumps(tpl["params"], ensure_ascii=False),
+            now
+        ))
+
     conn.commit()
     conn.close()
 
@@ -107,21 +133,43 @@ def export_chattemplate_to_json(tpl_id: int) -> str:
 
     portable = {
         "title": tpl["title"],
-        "category": tpl["category"],
+        "category": tpl.get("category"),
         "model": tpl["model"],
         "system_prompt": tpl["system_prompt"],
         "user_prompt": tpl["user_prompt"],
-        "fields": tpl["fields"],
-        "params": tpl["params"],
+        "fields": tpl.get("fields") or [],
+        "params": tpl.get("params") or {},
     }
 
     return json.dumps(portable, ensure_ascii=False, indent=2)
 
-import csv
-
 def import_chattemplate_from_json_file(uploaded_file):
     tpl = json.loads(uploaded_file.read().decode("utf-8"))
-    upsert_chattemplate(tpl)
+
+    # ---- Normalize & validate ----
+    required = ["title", "model", "system_prompt", "user_prompt"]
+    for k in required:
+        if k not in tpl:
+            raise ValueError(f"Template JSON missing required key: {k}")
+
+    tpl_obj = {
+        "title": tpl["title"],
+        "category": tpl.get("category"),
+        "model": tpl["model"],
+        "system_prompt": tpl["system_prompt"],
+        "user_prompt": tpl["user_prompt"],
+        "fields": tpl.get("fields") or [],
+        "params": tpl.get("params") or {},
+    }
+
+    # Validate JSON blocks
+    if not isinstance(tpl_obj["fields"], list):
+        raise ValueError("fields must be a JSON array")
+
+    if not isinstance(tpl_obj["params"], dict):
+        raise ValueError("params must be a JSON object")
+
+    upsert_chattemplate(tpl_obj)
 
 def import_chattemplates_from_csv(uploaded_file):
     df = pd.read_csv(uploaded_file)
@@ -219,6 +267,7 @@ def edit_chattemplate_dialog(tpl: dict, mode: str = "edit"):
                 return
 
             tpl_obj = {
+                "id": tpl.get("id"),
                 "title": title.strip(),
                 "category": category.strip() or None,
                 "model": model.strip(),
@@ -235,6 +284,22 @@ def edit_chattemplate_dialog(tpl: dict, mode: str = "edit"):
 
     with c2:
         if st.button("Cancel", width="stretch"):
+            st.rerun()
+
+@st.dialog("🗑️ Confirm Delete")
+def confirm_delete_template(tpl_id: int, title: str):
+    st.warning(f"Are you sure you want to delete:\n\n**{title}**")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        if st.button("❌ Cancel"):
+            st.rerun()
+
+    with c2:
+        if st.button("🗑️ Yes, Delete"):
+            delete_chattemplate_by_id(tpl_id)
+            st.toast("Template deleted", icon="🗑️")
             st.rerun()
 
 def load_shortcodes():
@@ -388,28 +453,67 @@ def formula_csv_importer():
 
         st.rerun()
 
+# Begin rendering
+st.markdown(
+    """
+    <style>
+    /* Make main container wider */
+    .block-container {
+        padding-top: 1.5rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        max-width: 98%;
+    }
+
+    /* Make headers bigger */
+    h1, h2, h3 {
+        letter-spacing: 0.5px;
+    }
+
+    /* Make data editor wider */
+    [data-testid="stDataFrame"] {
+        width: 100%;
+    }
+
+    /* Slightly bigger text in tables */
+    [data-testid="stDataFrame"] div {
+        font-size: 15px;
+    }
+
+    /* Buttons slightly larger */
+    button {
+        font-size: 15px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown("⚙️ Configuration")
+with col2:
+    title = st.empty()
+
 if "configMode" not in ss:
     ss.configMode = None
-    ss.header = "Configuration Mode"
     ss.templates = None
 
-headline = st.header(ss.header)
 with st.sidebar:
     if st.button("Templates 🍸"):
         ss.configMode = "Templates"
-        ss.header = "Templates"
+        title.markdown("🧠 ChatTemplates Manager")
     if st.button("Shortcodes "):
         ss.configMode = "Shortcodes"
-        ss.header = "Shortcodes"
+        title.markdown("✂️ Shortcodes")
     if st.button("All lessons"):
         ss.configMode= "All lessons"
-        ss.header = "All lessons"
+        title.markdown("📋 All Lessons")
     if st.button("Import formulas"):
         ss.configMode= "Formula Import"
-        ss.header = "Formula Import"
+        title.markdown("📥 Formula Import")
 
 if ss.configMode == "Templates":
-    st.header("🧠 ChatTemplates Manager")
 
     df = get_chattemplates_df()
 
@@ -429,6 +533,7 @@ if ss.configMode == "Templates":
         df,
         hide_index=True,
         height=500,
+        width="stretch",
         column_config={
             "Edit": st.column_config.CheckboxColumn("✏️ Edit"),
             "Delete": st.column_config.CheckboxColumn("🗑️ Delete"),
@@ -445,9 +550,7 @@ if ss.configMode == "Templates":
             edit_chattemplate_dialog(tpl, mode="edit")
 
         if row["Delete"]:
-            delete_chattemplate_by_id(tpl_id)
-            st.warning(f"Deleted template {tpl_id}")
-            st.rerun()
+            confirm_delete_template(tpl_id, row["title"])
 
         if row["Export"]:
             data = export_chattemplate_to_json(tpl_id)
@@ -478,9 +581,7 @@ if ss.configMode == "Templates":
             st.success(f"Imported {n} templates.")
             st.rerun()
 
-if ss.configMode == "Shortcodes":
-    st.header("Manage Quick Note Shortcodes")
-
+elif ss.configMode == "Shortcodes":
     shortcodes = load_shortcodes()
 
     # --- Display existing shortcodes ---
@@ -536,7 +637,8 @@ if ss.configMode == "Shortcodes":
             st.success(f"Added shortcode '{new_code}'")
             st.rerun()
 
-if ss.configMode == "All lessons":
+elif ss.configMode == "All lessons":
+
     all_lessons = get_all_lessons()
     if all_lessons.empty:
         st.warning("No lessons found in the database.")
@@ -546,7 +648,8 @@ if ss.configMode == "All lessons":
             all_lessons,
             num_rows="fixed",  # Prevent adding new rows
             column_config={"ROWID": None},  # Hide ROWID column
-            height=400
+            height=800,
+            width="stretch"
         )
 
         # Find rows where "Delete" checkbox is checked
@@ -566,5 +669,5 @@ if ss.configMode == "All lessons":
             st.success("Changes saved successfully!")
             st.rerun()  # Refresh table
 
-if ss.configMode == "Formula Import":
+elif ss.configMode == "Formula Import":
     formula_csv_importer()

@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -30,12 +31,19 @@ def init_published_db():
 # ========== TutorTrack uses this ==========
 def publish_item(title, subject, grade, content_type, content):
     now = datetime.now().isoformat(timespec="seconds")
+
+    # ---- Ensure content is TEXT ----
+    if isinstance(content, (dict, list)):
+        content_str = json.dumps(content, ensure_ascii=False, indent=2)
+    else:
+        content_str = str(content)
+
     conn = get_conn()
     conn.execute("""
         INSERT INTO PublishedItems
         (title, subject, grade, content_type, content, created_at, updated_at, visible)
         VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-    """, (title, subject, grade, content_type, content, now, now))
+    """, (title, subject, grade, content_type, content_str, now, now))
     conn.commit()
     conn.close()
 
@@ -98,12 +106,19 @@ def get_published_item_full(item_id):
     return row
 
 def update_published_item(item_id, title, subject, grade, content_type, content, visible):
+    import json
+
+    if isinstance(content, (dict, list)):
+        content_str = json.dumps(content, ensure_ascii=False, indent=2)
+    else:
+        content_str = str(content)
+
     conn = get_conn()
     conn.execute("""
         UPDATE PublishedItems
         SET title=?, subject=?, grade=?, content_type=?, content=?, updated_at=datetime('now'), visible=?
         WHERE id=?
-    """, (title, subject, grade, content_type, content, visible, item_id))
+    """, (title, subject, grade, content_type, content_str, visible, item_id))
     conn.commit()
     conn.close()
 

@@ -252,6 +252,48 @@ def generate_qr_code(text):
     with st.popover("QR Code"):
         st.image(file_path)
 
+# Render screen
+st.markdown(
+    """
+    <style>
+    /* Make main container wider */
+    .block-container {
+        padding-top: 1.5rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        max-width: 98%;
+    }
+
+    /* Make headers bigger */
+    h1, h2, h3 {
+        letter-spacing: 0.5px;
+    }
+
+    /* Make data editor wider */
+    [data-testid="stDataFrame"] {
+        width: 100%;
+    }
+
+    /* Slightly bigger text in tables */
+    [data-testid="stDataFrame"] div {
+        font-size: 15px;
+    }
+
+    /* Buttons slightly larger */
+    button {
+        font-size: 15px !important;
+    }
+    /* Make header rows align nicely */
+    [data-testid="stHorizontalBlock"] {
+    align-items: center;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
 if "ResourceMode" not in ss:
     ss.ResourceMode = "Resources"
 
@@ -272,12 +314,13 @@ if ss.ResourceMode == "Online":
         ss.tags = pd.DataFrame([], columns=['Tag'])
         ss.themes = pd.DataFrame([], columns=['Theme'])
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns([8, 1])
 
     with col1:
-        st.header("Resources")
+        st.header("📚 Resources")
     with col2:
-        if st.button("➕", key=f"Resource_editor", help="Add New Resource"):
+        st.markdown("<div style='height: 3.2rem'></div>", unsafe_allow_html=True)
+        if st.button("➕", key="Resource_editor", help="Add New Resource"):
             add_new_resource()
 
     if 'resources' not in ss:
@@ -314,7 +357,8 @@ if ss.ResourceMode == "Online":
         )
     }
 
-    search_query = st.text_input("Search:", "")
+    search_query = st.text_input("🔎 Search resources", "", placeholder="Search by tag, theme, or subject...")
+
     if search_query:
     #    filtered_resources = ss.resources[ss.resources['Tags'].apply( lambda tags: any(search_query.lower() in tag.lower() for tag in tags))]
         filtered_resources = ss.resources[ss.resources['Tags'].str.contains( search_query, case=False, na=False)
@@ -328,7 +372,9 @@ if ss.ResourceMode == "Online":
                  column_config=column_config,
                  on_change=get_resource_details,
                  key="resource_row",
-                 hide_index=True, height=600)
+                 hide_index=True,
+                 height=650,
+                 width="stretch")
 
 if ss.ResourceMode == "Documents":
     resources_pdf_viewer()

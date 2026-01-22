@@ -2,7 +2,9 @@
 .venv/
 __pycache__/
 *.pyc
-*.db
+tutorassist/*.db
+tutortrack/*.db
+identifier.sqlite
 shared/latex_imgs/
 shared/pdf_files/
 idea/
