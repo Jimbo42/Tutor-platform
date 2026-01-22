@@ -4,16 +4,20 @@ from streamlit import session_state as ss
 import pandas as pd
 import os
 import qrcode
+import json
 from pathlib import Path
+import shutil
 
 from shared.formulas import show_formulas
 from published_manager import show_published_manager
 from tutortrack.lessons import get_conn
+from shared.published_db import publish_item
 
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
 IMG_PATH = BASE_DIR / "resources" / "images"
 PDF_DIR = PARENT_DIR / "shared" / "pdf_files"
+PUBLISHED_PDF_DIR = BASE_DIR.parent / "shared" / "published_files"
 PDF_DIR.mkdir(parents=True, exist_ok=True)
 pdf_folder = str(PDF_DIR)
 
@@ -163,6 +167,26 @@ def rename_pdf_dialog(old_name: str, pdf_folder: str):
             ss.pop("rename_target", None)
             st.rerun()
 
+def publish_pdf_resource(filename, source_folder):
+    src = Path(source_folder) / filename
+    PUBLISHED_PDF_DIR.mkdir(parents=True, exist_ok=True)
+
+    dst = PUBLISHED_PDF_DIR / filename
+
+    # Copy (overwrite if exists)
+    shutil.copy2(src, dst)
+
+    payload = {
+        "filename": filename
+    }
+
+    publish_item(
+        title=Path(filename).stem,
+        subject="Notes",
+        grade="All",
+        content_type="pdf",
+        content=payload
+    )
 
 def resources_pdf_viewer():
 
@@ -209,6 +233,10 @@ def resources_pdf_viewer():
         elif choice == "✏️":
             ss["rename_target"] = filename
 
+        elif choice == "📤":
+            publish_pdf_resource(filename, pdf_folder)
+            st.toast("Published to student library", icon="📤")
+
         # reset selection back to neutral
         ss[key] = "·"
 
@@ -228,7 +256,7 @@ def resources_pdf_viewer():
             st.pills(
                 label="PDF file action",
                 label_visibility="collapsed",
-                options=["·", "👀", "🗑️", "✏️", filename],
+                options=["·", "👀", "🗑️", "✏️", "📤", filename],
                 key=f"pdf_action_{i}",
                 width="content",
                 on_change=handle_action,
