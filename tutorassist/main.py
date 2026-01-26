@@ -90,9 +90,10 @@ with st.sidebar:
 pages = {
     "Library": [
         st.Page("practice.py", title="Practice Questions"),
-        st.Page("notes.py", title="Notes"),
+        st.Page("math_skills.py", title="Math Skills Challenge"),
     ],
     "Resources": [
+        st.Page("notes.py", title="Notes"),
         st.Page("formula_a.py", title="Formula List"),
     ],
     "Tools": [
