@@ -302,6 +302,144 @@ GENERATORS = {
 }
 
 # ==============================
+# 💡 Hint System
+# ==============================
+def build_hints_common_factor(q):
+    expr = q["target_expr"]
+
+    # Try to extract some structure for better messaging
+    try:
+        poly = sp.Poly(expr, j, k)
+        coeffs = [int(c) for c in poly.coeffs() if c.is_Integer]
+        if coeffs:
+            g = abs(sp.gcd_list(coeffs))
+        else:
+            g = None
+    except Exception:
+        g = None
+
+    hints = [
+        "Look for the greatest common factor (GCF) in all terms.",
+        "First check the coefficients: what number divides all of them?",
+        "Then check the variables: do all terms share j or k?",
+    ]
+
+    if g and g > 1:
+        hints.append(f"The numeric GCF of the coefficients is {g}.")
+
+    hints += [
+        "Factor the GCF out of every term.",
+        "Check that the expression inside the brackets cannot be factored further."
+    ]
+
+    return hints
+
+def build_hints_trinomial_a1(q):
+    expr = q["target_expr"]
+    poly = sp.Poly(expr, j)
+
+    b = int(poly.coeffs()[1])
+    c = int(poly.coeffs()[2])
+
+    hints = [
+        f"Find two numbers that multiply to {c}.",
+        f"Those two numbers must add to {b}.",
+        "Decide if the two numbers should be both positive, both negative, or one of each.",
+        f"List factor pairs of {abs(c)} and test their sums.",
+        "Rewrite the middle term using those two numbers, then factor by grouping."
+    ]
+    return hints
+
+def build_hints_trinomial_aN(q):
+    expr = q["target_expr"]
+    poly = sp.Poly(expr, j)
+
+    a = int(poly.coeffs()[0])
+    b = int(poly.coeffs()[1])
+    c = int(poly.coeffs()[2])
+
+    ac = a * c
+
+    hints = [
+        f"First, multiply a·c = {a} × {c} = {ac}.",
+        f"Now find two numbers that multiply to {ac} and add to {b}.",
+        "Will the two numbers be both positive, both negative, or one of each?",
+        f"List factor pairs of {abs(ac)} and test their sums.",
+        "Rewrite the middle term using those two numbers, then factor by grouping."
+    ]
+    return hints
+
+def build_hints_diff_squares(q):
+    expr = q["target_expr"]
+
+    hints = [
+        "Does this match the pattern a² − b² ?",
+        "A difference of squares always factors as (a − b)(a + b).",
+        "What is a? (the square root of the first term)",
+        "What is b? (the square root of the second term)",
+        "Write the two factors using (a − b)(a + b)."
+    ]
+
+    return hints
+
+
+def build_hints_sum_squares(q):
+    hints = [
+        "This is a sum of squares: a² + b².",
+        "Over the real numbers, a sum of squares does not factor.",
+        "So the correct conclusion is that this expression is irreducible (or prime).",
+        "Type: irreducible, prime, or cannot be factored."
+    ]
+
+    return hints
+
+
+def build_hints_vertex_form(q):
+    expr = q["target_expr"]
+
+    # Extract a, b, c if possible
+    try:
+        poly = sp.Poly(expr, j)
+        a = int(poly.coeffs()[0])
+        b = int(poly.coeffs()[1])
+        c = int(poly.coeffs()[2])
+    except Exception:
+        a = b = c = None
+
+    hints = [
+        "You want to rewrite this in the form a(j − h)² + k.",
+        "Group the j² and j terms together.",
+    ]
+
+    if a is not None and a != 1:
+        hints.append(f"First factor {a} out of the j² and j terms.")
+
+    hints += [
+        "Complete the square inside the brackets.",
+        "Remember to add and subtract the same number to keep the expression balanced.",
+        "Simplify the constant outside the square.",
+        "Write the final result in the form a(j − h)² + k."
+    ]
+
+    return hints
+
+HINT_BUILDERS = {
+    1: build_hints_common_factor,
+    2: build_hints_trinomial_a1,
+    3: build_hints_trinomial_aN,
+    4: build_hints_diff_squares,
+    5: build_hints_sum_squares,
+    6: build_hints_vertex_form,
+}
+
+def build_hints_for_question(q):
+    builder = HINT_BUILDERS.get(q["level"])
+    if not builder:
+        return []
+    return builder(q)
+
+
+# ==============================
 # 🧠 Session Engine
 # ==============================
 
@@ -326,6 +464,9 @@ def start_factoring_session(num_questions, levels):
             "level": lvl,
             "attempts": 0,
             "hints_used": 0,
+            "available_hints": [],
+            "hints_shown": [],
+            "hint_index": 0,
             "correct": False,
             "first_try_correct": False,
             "user_answer": "",
@@ -460,8 +601,22 @@ def top_level_term_count(expr: sp.Expr) -> int:
     return 1
 
 def to_latex_like(s: str) -> str:
-    # Convert ^n into ^{n}
-    s = re.sub(r"\^\s*\(?\s*([-\d]+)\s*\)?", r"^{\1}", s)
+    """
+    Convert user-friendly caret powers into LaTeX superscripts.
+    Critical: do NOT greedily capture the '-' of the next term.
+    Examples:
+      j^2        -> j^{2}
+      j^-3       -> j^{-3}
+      j^(12)     -> j^{12}
+      j^(-4)     -> j^{-4}
+      2j^2-6j... -> 2j^{2}-6j...
+    """
+    # Handle parenthesized exponents first: ^( -?\d+ )
+    s = re.sub(r"\^\s*\(\s*(-?\d+)\s*\)", r"^{\1}", s)
+
+    # Handle bare integer exponents: ^-?\d+
+    s = re.sub(r"\^\s*(-?\d+)", r"^{\1}", s)
+
     return s
 
 # ==============================
@@ -588,176 +743,200 @@ def factoring_practice():
     q.setdefault("first_try_correct", False)
     q.setdefault("user_answer", "")
     q.setdefault("current_expr", q["target_expr"])
+    q["available_hints"] = build_hints_for_question(q)
 
-    st.markdown(f"### Question {idx + 1} of {len(questions)}")
-    if q["level"] == 6:
-        st.latex(r"\LARGE \textbf{Write in vertex form:}\quad " + sp.latex(q["target_expr"]))
-    else:
-        st.latex(r"\LARGE \textbf{Factor:}\quad " + sp.latex(q["target_expr"]))
+    left, right = st.columns([3, 1.3])
 
-    st.markdown(f"💡 Hints used: **{q['hints_used']}**")
+    with left:
+        st.markdown(f"### Question {idx + 1} of {len(questions)}")
+        if q["level"] == 6:
+            st.latex(r"\LARGE \textbf{Write in vertex form:}\quad " + sp.latex(q["target_expr"]))
+        else:
+            st.latex(r"\LARGE \textbf{Factor:}\quad " + sp.latex(q["target_expr"]))
 
-    if st.button("💡 Show Hint"):
-        q["hints_used"] += 1
-        hint_fn = GENERATORS[q["level"]][2]
-        q["last_message"] = "💡 " + hint_fn(q)
-        st.rerun()
+        st.markdown(f"💡 Hints used: **{q['hints_used']}**")
 
-    st.markdown("### ✏️ Working:")
+        st.markdown("### ✏️ Working:")
 
-    # message bar
-    if q.get("last_message"):
-        # keep your existing style (info box)
-        st.info(q["last_message"])
+        # message bar
+        if q.get("last_message"):
+            # keep your existing style (info box)
+            st.info(q["last_message"])
 
-    # Show original line (LEFT-aligned)
-    st.markdown(f"${sp.latex(q['target_expr'])}$")
+        # Show original line (LEFT-aligned)
+        st.markdown(f"${sp.latex(q['target_expr'])}$")
 
-    # Show steps EXACTLY as typed, but with superscripts
-    for step in q["steps"]:
-        txt = step["text"] if isinstance(step, dict) else str(step)
+        # Show steps EXACTLY as typed, but with superscripts
+        for step in q["steps"]:
+            txt = step["text"] if isinstance(step, dict) else str(step)
 
-        latex_txt = to_latex_like(txt)
+            latex_txt = to_latex_like(txt)
 
-        # Render as math, but using THEIR structure
-        st.markdown(f"= ${latex_txt}$")
+            # Render as math, but using THEIR structure
+            st.markdown(f"= ${latex_txt}$")
 
-    # ------------------------------
-    # Input
-    # ------------------------------
-    user_answer = st.text_input(
-        "Your answer:",
-        key=f"fact_answer_box_{ss.fact_input_version}",
-        autocomplete="off",
-    )
+        # ------------------------------
+        # Input
+        # ------------------------------
+        user_answer = st.text_input(
+            "Your answer:",
+            key=f"fact_answer_box_{ss.fact_input_version}",
+            autocomplete="off",
+        )
 
-    col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([1, 1])
 
-    with col1:
-        if st.button("✅ Submit"):
-            # Special case: sum of squares / irreducible
-            if q["level"] == 5:
-                u = (user_answer or "").strip().lower().replace(" ", "")
-                ok = u in {
-                    "irreducible",
-                    "prime",
-                    "cannotbefactored",
-                    "cannotfactor",
-                    "no real factors",
-                }
-                if ok:
-                    q["correct"] = True
+        with col1:
+            if st.button("✅ Submit"):
+                # Special case: sum of squares / irreducible
+                if q["level"] == 5:
+                    u = (user_answer or "").strip().lower().replace(" ", "")
+                    ok = u in {
+                        "irreducible",
+                        "prime",
+                        "cannotbefactored",
+                        "cannotfactor",
+                        "no real factors",
+                    }
+                    if ok:
+                        q["correct"] = True
+                        q["user_answer"] = user_answer
+                        # first try == no wrong attempts yet
+                        if q["attempts"] == 0:
+                            q["first_try_correct"] = True
+                        q["last_message"] = "🎉 Correct — this does not factor over the reals."
+
+                        # advance
+                        if idx + 1 >= len(questions):
+                            ss.factoring["finished"] = True
+                        else:
+                            ss.factoring["current"] += 1
+                            questions[ss.factoring["current"]].setdefault("last_message", "")
+                            questions[ss.factoring["current"]]["last_message"] = ""
+
+                        ss.fact_input_version += 1
+                        st.rerun()
+                    else:
+                        q["attempts"] += 1
+                        q["last_message"] = "❌ For this one, enter: irreducible / prime / cannot be factored."
+                        st.rerun()
+                    return
+
+                # Normal: parse
+                expr_u = parse_user_expr(user_answer)
+
+                if expr_u is None:
+                    q["attempts"] += 1
+                    q["last_message"] = "❌ I couldn't parse that. Try (j-2)(j+3) or 8(6j-5k)."
+                    st.rerun()
+                    return
+
+                # 1) Must be equivalent to ORIGINAL target
+                if not equivalent(expr_u, q["target_expr"]):
+                    q["attempts"] += 1
+                    q["last_message"] = "❌ This is not equivalent to the original expression."
+                    st.rerun()
+                    return
+
+                # 2) If matches one of the precomputed final answers -> DONE
+                if canon_key(expr_u) in q["final_answers"]:
+                    # 🔒 Extra structural check for Level 6 (vertex form)
+                    if q["level"] == 6 and q.get("vertex_final_expr") is not None:
+                        student_terms = top_level_term_count(expr_u)
+                        final_terms = top_level_term_count(q["vertex_final_expr"])
+
+                        if student_terms != final_terms:
+                            # Record this as a valid step (if it actually changes something)
+                            last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
+                            if canon_key(expr_u) != last_key:
+                                q["steps"].append({
+                                    "expr": expr_u,
+                                    "text": user_answer.strip()
+                                })
+                                q["current_expr"] = expr_u
+
+                            q["last_message"] = "⚠️ Finish simplifying the constants."
+                            ss.fact_input_version += 1
+                            st.rerun()
+                            return
+
+                    last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
+                    if canon_key(expr_u) != last_key:
+                        q["steps"].append({
+                            "expr": expr_u,
+                            "text": user_answer.strip()
+                        })
+
+                    q["current_expr"] = expr_u
                     q["user_answer"] = user_answer
-                    # first try == no wrong attempts yet
+                    q["correct"] = True
                     if q["attempts"] == 0:
                         q["first_try_correct"] = True
-                    q["last_message"] = "🎉 Correct — this does not factor over the reals."
 
-                    # advance
+                    q["last_message"] = "🎉 Fully factored!"
+
                     if idx + 1 >= len(questions):
                         ss.factoring["finished"] = True
                     else:
                         ss.factoring["current"] += 1
-                        questions[ss.factoring["current"]].setdefault("last_message", "")
                         questions[ss.factoring["current"]]["last_message"] = ""
 
                     ss.fact_input_version += 1
                     st.rerun()
-                else:
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ For this one, enter: irreducible / prime / cannot be factored."
-                    st.rerun()
-                return
+                    return
 
-            # Normal: parse
-            expr_u = parse_user_expr(user_answer)
-
-            if expr_u is None:
-                q["attempts"] += 1
-                q["last_message"] = "❌ I couldn't parse that. Try (j-2)(j+3) or 8(6j-5k)."
-                st.rerun()
-                return
-
-            # 1) Must be equivalent to ORIGINAL target
-            if not equivalent(expr_u, q["target_expr"]):
-                q["attempts"] += 1
-                q["last_message"] = "❌ This is not equivalent to the original expression."
-                st.rerun()
-                return
-
-            # 2) If matches one of the precomputed final answers -> DONE
-            if canon_key(expr_u) in q["final_answers"]:
-                # 🔒 Extra structural check for Level 6 (vertex form)
-                if q["level"] == 6 and q.get("vertex_final_expr") is not None:
-                    student_terms = top_level_term_count(expr_u)
-                    final_terms = top_level_term_count(q["vertex_final_expr"])
-
-                    if student_terms != final_terms:
-                        # Record this as a valid step (if it actually changes something)
-                        last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
-                        if canon_key(expr_u) != last_key:
-                            q["steps"].append({
-                                "expr": expr_u,
-                                "text": user_answer.strip()
-                            })
-                            q["current_expr"] = expr_u
-
-                        q["last_message"] = "⚠️ Finish simplifying the constants."
-                        ss.fact_input_version += 1
-                        st.rerun()
-                        return
-
+                # 3) Equivalent but not done yet:
+                #    - if no change -> warn
+                #    - else record step (NO penalty)
                 last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
-                if canon_key(expr_u) != last_key:
-                    q["steps"].append({
-                        "expr": expr_u,
-                        "text": user_answer.strip()
+                if canon_key(expr_u) == last_key:
+                    q["last_message"] = "⚠️ This does not change the expression. Try factoring something."
+                    st.rerun()
+                    return
+
+                q["steps"].append({
+                    "expr": expr_u,
+                    "text": user_answer.strip()
                     })
-
                 q["current_expr"] = expr_u
-                q["user_answer"] = user_answer
-                q["correct"] = True
-                if q["attempts"] == 0:
-                    q["first_try_correct"] = True
-
-                q["last_message"] = "🎉 Fully factored!"
-
-                if idx + 1 >= len(questions):
-                    ss.factoring["finished"] = True
-                else:
-                    ss.factoring["current"] += 1
-                    questions[ss.factoring["current"]]["last_message"] = ""
-
+                q["last_message"] = "✅ Good step — keep factoring."
                 ss.fact_input_version += 1
                 st.rerun()
                 return
 
-            # 3) Equivalent but not done yet:
-            #    - if no change -> warn
-            #    - else record step (NO penalty)
-            last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
-            if canon_key(expr_u) == last_key:
-                q["last_message"] = "⚠️ This does not change the expression. Try factoring something."
+        with col2:
+            if st.button("⏭️ Skip"):
+                if idx + 1 >= len(questions):
+                    ss.factoring["finished"] = True
+                else:
+                    ss.factoring["current"] += 1
+                    questions[ss.factoring["current"]].setdefault("last_message", "")
+                    questions[ss.factoring["current"]]["last_message"] = ""
+                ss.fact_input_version += 1
                 st.rerun()
-                return
 
-            q["steps"].append({
-                "expr": expr_u,
-                "text": user_answer.strip()
-                })
-            q["current_expr"] = expr_u
-            q["last_message"] = "✅ Good step — keep factoring."
-            ss.fact_input_version += 1
-            st.rerun()
-            return
+    with right:
+        st.markdown("### 💡 Hints")
 
-    with col2:
-        if st.button("⏭️ Skip"):
-            if idx + 1 >= len(questions):
-                ss.factoring["finished"] = True
+        if q["hints_shown"]:
+            for i, h in enumerate(q["hints_shown"], 1):
+                st.markdown(f"**{i}.** {h}")
+        else:
+            st.caption("No hints used yet.")
+
+        st.divider()
+
+        if st.button("➕ Show next hint"):
+            i = q["hint_index"]
+            hints = q["available_hints"]
+
+            if i < len(hints):
+                new_hint = hints[i]
+                q["hints_shown"].append(new_hint)
+                q["hint_index"] += 1
+                q["hints_used"] = q["hint_index"]
             else:
-                ss.factoring["current"] += 1
-                questions[ss.factoring["current"]].setdefault("last_message", "")
-                questions[ss.factoring["current"]]["last_message"] = ""
-            ss.fact_input_version += 1
+                if not q["hints_shown"] or not q["hints_shown"][-1].startswith("ℹ️"):
+                    q["hints_shown"].append("ℹ️ No more hints available for this question.")
+
             st.rerun()
