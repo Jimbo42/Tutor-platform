@@ -595,6 +595,94 @@ def equivalent(a: sp.Expr, b: sp.Expr) -> bool:
     except Exception:
         return False
 
+def is_fully_factored_expr(expr: sp.Expr) -> bool:
+    """
+    Treat as fully factored if SymPy's factor() does not change it,
+    after canonicalizing (so (a)(b) vs (b)(a) is fine).
+    """
+    try:
+        f = sp.factor(expr)
+        return canon_key(expr) == canon_key(f)
+    except Exception:
+        return False
+
+# ==============================
+# 🧠 Reactive (Adaptive) Hints
+# ==============================
+def get_reactive_hint(q, new_expr: sp.Expr, last_expr: sp.Expr = None):
+    """
+    Returns a string hint if a recognizable mistake pattern is detected.
+    Returns None if no specific reactive hint applies.
+    """
+    if new_expr is None:
+        return "I couldn't understand that expression. Check your parentheses and operators."
+
+    last = last_expr if last_expr is not None else q.get("current_expr", q["target_expr"])
+
+    # 0) Must remain equivalent to original
+    try:
+        if not equivalent(new_expr, q["target_expr"]):
+            return "Your new expression is not equivalent to the original. Check your algebra."
+    except Exception:
+        pass
+
+    # 🟢 1) Decomposition / regrouping step = VALID PROGRESS
+    # If both are sums and number of terms increased, this is a real step (e.g., ac-split)
+    try:
+        if isinstance(new_expr, sp.Add) and isinstance(last, sp.Add):
+            if len(new_expr.args) > len(last.args):
+                # This is a decomposition step like: 3j^2+19j+20 -> 3j^2+15j+4j+20
+                return None
+    except Exception:
+        pass
+
+    # 2) Truly no change (same structure)
+    try:
+        if canon_key(new_expr) == canon_key(last):
+            return "That step didn’t change the expression. Try factoring something."
+    except Exception:
+        pass
+
+    # 3) Expanded instead of factored (product -> sum)
+    try:
+        old_terms = top_level_term_count(last)
+        new_terms = top_level_term_count(new_expr)
+
+        # If they turned a product into a bigger sum, that's expansion
+        if new_terms > old_terms and isinstance(last, sp.Mul):
+            return "This step expanded the expression. The goal is to factor, not expand."
+    except Exception:
+        pass
+
+    # 4) Partial progress toward factoring (but not done)
+    try:
+        if equivalent(new_expr, q["target_expr"]) and not is_fully_factored_expr(new_expr):
+
+            old = last
+
+            # Count top-level factors
+            def factor_count(e):
+                if isinstance(e, sp.Mul):
+                    return len(e.args)
+                return 1
+
+            old_factors = factor_count(old)
+            new_factors = factor_count(new_expr)
+
+            old_terms = top_level_term_count(old)
+            new_terms = top_level_term_count(new_expr)
+
+            # Only praise if structure IMPROVED toward factoring
+            if new_factors > old_factors or new_terms < old_terms:
+                return "Good start, but this expression can still be factored further."
+            else:
+                return "This is algebraically correct, but it does not move you closer to a factorization."
+
+    except Exception:
+        pass
+
+    return None
+
 def top_level_term_count(expr: sp.Expr) -> int:
     if isinstance(expr, sp.Add):
         return len(expr.args)
@@ -801,53 +889,66 @@ def factoring_practice():
                     if ok:
                         q["correct"] = True
                         q["user_answer"] = user_answer
-                        # first try == no wrong attempts yet
                         if q["attempts"] == 0:
                             q["first_try_correct"] = True
                         q["last_message"] = "🎉 Correct — this does not factor over the reals."
 
-                        # advance
                         if idx + 1 >= len(questions):
                             ss.factoring["finished"] = True
                         else:
                             ss.factoring["current"] += 1
-                            questions[ss.factoring["current"]].setdefault("last_message", "")
                             questions[ss.factoring["current"]]["last_message"] = ""
 
                         ss.fact_input_version += 1
+                        ss.fact_live_input = ""
                         st.rerun()
                     else:
                         q["attempts"] += 1
-                        q["last_message"] = "❌ For this one, enter: irreducible / prime / cannot be factored."
+                        msg = "❌ For this one, enter: irreducible / prime / cannot be factored."
+                        q["last_message"] = msg
+                        q["hints_shown"].append("🧠 " + msg.replace("❌ ", ""))
                         st.rerun()
                     return
 
-                # Normal: parse
+                # -------------------------
+                # Normal algebraic input
+                # -------------------------
                 expr_u = parse_user_expr(user_answer)
 
                 if expr_u is None:
                     q["attempts"] += 1
-                    q["last_message"] = "❌ I couldn't parse that. Try (j-2)(j+3) or 8(6j-5k)."
+                    msg = "❌ I couldn't parse that. Try (j-2)(j+3) or 8(6j-5k)."
+                    q["last_message"] = msg
+                    q["hints_shown"].append("🧠 " + msg.replace("❌ ", ""))
                     st.rerun()
                     return
+
+                prev_expr = q.get("current_expr", q["target_expr"])
 
                 # 1) Must be equivalent to ORIGINAL target
                 if not equivalent(expr_u, q["target_expr"]):
                     q["attempts"] += 1
-                    q["last_message"] = "❌ This is not equivalent to the original expression."
+
+                    rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
+                    if rh:
+                        q["hints_shown"].append("🧠 " + rh)
+                        q["last_message"] = "❌ " + rh
+                    else:
+                        q["last_message"] = "❌ This is not equivalent to the original expression."
+
                     st.rerun()
                     return
 
                 # 2) If matches one of the precomputed final answers -> DONE
                 if canon_key(expr_u) in q["final_answers"]:
+
                     # 🔒 Extra structural check for Level 6 (vertex form)
                     if q["level"] == 6 and q.get("vertex_final_expr") is not None:
                         student_terms = top_level_term_count(expr_u)
                         final_terms = top_level_term_count(q["vertex_final_expr"])
 
                         if student_terms != final_terms:
-                            # Record this as a valid step (if it actually changes something)
-                            last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
+                            last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(prev_expr)
                             if canon_key(expr_u) != last_key:
                                 q["steps"].append({
                                     "expr": expr_u,
@@ -857,10 +958,11 @@ def factoring_practice():
 
                             q["last_message"] = "⚠️ Finish simplifying the constants."
                             ss.fact_input_version += 1
+                            ss.fact_live_input = ""
                             st.rerun()
                             return
 
-                    last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
+                    last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(prev_expr)
                     if canon_key(expr_u) != last_key:
                         q["steps"].append({
                             "expr": expr_u,
@@ -882,61 +984,39 @@ def factoring_practice():
                         questions[ss.factoring["current"]]["last_message"] = ""
 
                     ss.fact_input_version += 1
+                    ss.fact_live_input = ""
                     st.rerun()
                     return
 
                 # 3) Equivalent but not done yet:
-                #    - if no change -> warn
-                #    - else record step (NO penalty)
-                last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(q["target_expr"])
+                last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(prev_expr)
                 if canon_key(expr_u) == last_key:
-                    q["last_message"] = "⚠️ This does not change the expression. Try factoring something."
+                    rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
+                    if rh:
+                        q["hints_shown"].append("🧠 " + rh)
+                        q["last_message"] = "⚠️ " + rh
+                    else:
+                        q["last_message"] = "⚠️ This does not change the expression. Try factoring something."
                     st.rerun()
                     return
+
+                # 4) Record as a valid step
+                rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
 
                 q["steps"].append({
                     "expr": expr_u,
                     "text": user_answer.strip()
-                    })
+                })
                 q["current_expr"] = expr_u
-                q["last_message"] = "✅ Good step — keep factoring."
+
+                if rh:
+                    q["hints_shown"].append("🧠 " + rh)
+                    q["last_message"] = "🧠 " + rh
+                else:
+                    q["last_message"] = "✅ Good step — keep factoring."
+
                 ss.fact_input_version += 1
+                ss.fact_live_input = ""
                 st.rerun()
                 return
 
-        with col2:
-            if st.button("⏭️ Skip"):
-                if idx + 1 >= len(questions):
-                    ss.factoring["finished"] = True
-                else:
-                    ss.factoring["current"] += 1
-                    questions[ss.factoring["current"]].setdefault("last_message", "")
-                    questions[ss.factoring["current"]]["last_message"] = ""
-                ss.fact_input_version += 1
-                st.rerun()
-
-    with right:
-        st.markdown("### 💡 Hints")
-
-        if q["hints_shown"]:
-            for i, h in enumerate(q["hints_shown"], 1):
-                st.markdown(f"**{i}.** {h}")
-        else:
-            st.caption("No hints used yet.")
-
-        st.divider()
-
-        if st.button("➕ Show next hint"):
-            i = q["hint_index"]
-            hints = q["available_hints"]
-
-            if i < len(hints):
-                new_hint = hints[i]
-                q["hints_shown"].append(new_hint)
-                q["hint_index"] += 1
-                q["hints_used"] = q["hint_index"]
-            else:
-                if not q["hints_shown"] or not q["hints_shown"][-1].startswith("ℹ️"):
-                    q["hints_shown"].append("ℹ️ No more hints available for this question.")
-
-            st.rerun()
