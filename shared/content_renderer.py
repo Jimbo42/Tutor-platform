@@ -2,6 +2,8 @@ import streamlit as st
 from streamlit import session_state as ss
 import json
 import re
+import streamlit.components.v1 as components
+import requests
 
 _MATH_BLOCK_OR_INLINE = re.compile(r"(\$\$.*?\$\$|\$.*?\$)", re.DOTALL)
 
@@ -35,6 +37,76 @@ def translate_latex(val: str) -> str:
             parts[i] = wrap_tex_runs(parts[i])
 
     return "".join(parts)
+
+def _render_gdrive_pdf(payload: dict):
+    preview_url = payload.get("preview_url") or payload.get("view_url")
+    if not preview_url:
+        st.error("PDF payload missing preview_url/view_url")
+        st.json(payload)
+        return
+
+    # Best embedding endpoint for Drive PDFs
+    if "/preview" not in preview_url and "/file/d/" in preview_url:
+        preview_url = preview_url.replace("/view", "/preview")
+
+    components.iframe(preview_url, height=900, scrolling=True)
+
+    view_url = payload.get("view_url")
+    if view_url:
+        st.link_button("Open in Google Drive", view_url)
+
+import requests
+
+def _render_gdrive_interactive(payload: dict, key_prefix: str = ""):
+    download_url = payload.get("download_url")
+    view_url = payload.get("view_url")
+
+    st.info("Interactive content stored in Google Drive.")
+
+    if payload.get("filename"):
+        st.caption(f"File: **{payload['filename']}**")
+
+    # Buttons
+    c1, c2 = st.columns(2)
+    with c1:
+        if view_url:
+            st.link_button("Open in Google Drive", view_url)
+    with c2:
+        if download_url:
+            st.link_button("Download JSON", download_url)
+
+    if not download_url:
+        st.warning("No download URL found.")
+        return
+
+    # ---- AUTO FETCH + CACHE ----
+    cache_key = f"{key_prefix}interactive_json"
+
+    if cache_key not in ss:
+        try:
+            r = requests.get(download_url, timeout=15)
+            r.raise_for_status()
+            ss[cache_key] = r.json()
+        except Exception as e:
+            st.error(f"Could not load JSON from Google Drive: {e}")
+            with st.expander("Payload", expanded=True):
+                st.json(payload)
+            return
+
+    data = ss[cache_key]
+
+    # ---- STUDENT EXPERIENCE RENDER ----
+    if isinstance(data, dict) and data.get("type") == "questions":
+        st.divider()
+        st.subheader("Student Preview")
+        render_interactive_questions(data)
+    else:
+        st.warning("Downloaded JSON is not a worksheet.")
+        st.json(data)
+
+    # Optional payload debug
+    with st.expander("Payload", expanded=False):
+        st.json(payload)
 
 def render_interactive_questions(data):
     st.subheader(data.get("title", "Practice Questions"))
@@ -180,13 +252,52 @@ def short_answer_is_correct(user_ans: str, q: dict) -> bool:
 
     return False
 
-def render_published_content(content: str):
-    content_str = content.strip()
+def render_published_content(content: str, content_type: str | None = None):
+    """
+    content: TEXT pulled from SQLite (either raw JSON worksheet, plain text, or a Drive payload JSON)
+    content_type: optional, from PublishedItems.content_type
+      - "pdf" -> expect Drive payload and embed PDF
+      - "interactive" -> expect Drive payload and show links
+      - otherwise: auto-detect questions JSON vs plain text
+    """
+    content_str = (content or "").strip()
 
+    # ---- type-directed rendering first ----
+    if content_type in ("pdf", "interactive"):
+        if not content_str.startswith("{"):
+            st.error(f"Expected JSON payload for content_type={content_type}, got plain text.")
+            st.markdown(translate_latex(content_str), unsafe_allow_html=True)
+            return
+
+        try:
+            payload = json.loads(content_str)
+        except Exception:
+            st.error("Could not parse JSON payload.")
+            st.code(content_str)
+            return
+
+        provider = payload.get("provider")
+        if provider == "gdrive":
+            if content_type == "pdf":
+                _render_gdrive_pdf(payload)
+                return
+            if content_type == "interactive":
+#                _render_gdrive_interactive(payload)
+                _render_gdrive_interactive(payload, key_prefix=f"pm_{payload.get('file_id', '')}_")
+
+                return
+
+        # fallback for unknown provider
+        st.warning("Unknown provider payload; showing raw JSON.")
+        st.json(payload)
+        return
+
+    # ---- legacy auto-detect mode ----
     if content_str.startswith("{"):
         try:
             data = json.loads(content_str)
 
+            # If it's a worksheet JSON, render interactively
             if isinstance(data, dict) and data.get("type") == "questions":
                 render_interactive_questions(data)
             else:
@@ -194,6 +305,6 @@ def render_published_content(content: str):
 
         except Exception:
             st.error("This content looks like JSON but could not be parsed.")
-            st.markdown(translate_latex(content), unsafe_allow_html=True)
+            st.markdown(translate_latex(content_str), unsafe_allow_html=True)
     else:
-        st.markdown(translate_latex(content), unsafe_allow_html=True)
+        st.markdown(translate_latex(content_str), unsafe_allow_html=True)

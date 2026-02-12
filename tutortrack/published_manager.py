@@ -23,7 +23,7 @@ def open_preview_dialog(item_id):
 
     st.divider()
 
-    render_published_content(content)
+    render_published_content(content, content_type=ctype)
 
 @st.dialog("✏️ Edit Published Item")
 def open_edit_dialog(item_id):
@@ -76,7 +76,7 @@ def show_published_manager():
 
     df.insert(0, "Preview", False)
     df.insert(1, "Edit", False)
-    df.insert(1, "Delete", False)
+    df.insert(2, "Delete", False)
 
     # Display table
     edited = st.data_editor(

@@ -53,6 +53,9 @@ st.markdown(
 )
 
 pages = {
+    "Home": [
+        st.Page("home.py", title="Home", default=True),
+        ],
     "Lessons": [
         st.Page("lessons.py", title="Lessons"),
         st.Page("written.py", title="Written Notes"),

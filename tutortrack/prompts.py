@@ -10,6 +10,42 @@ from pathlib import Path
 
 from tutortrack.lessons import get_conn
 from shared.published_db import publish_item
+from shared.content_renderer import render_interactive_questions, translate_latex
+
+_DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
+_DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
+_DRIVE_OPEN_ID = re.compile(r"/open\?id=([a-zA-Z0-9_-]+)")
+
+def extract_gdrive_file_id(url_or_id: str) -> str | None:
+    if not url_or_id:
+        return None
+    s = url_or_id.strip()
+
+    m = _DRIVE_FILE_ID.search(s)
+    if m:
+        return m.group(1)
+
+    m = _DRIVE_UC_ID.search(s)
+    if m:
+        return m.group(1)
+
+    m = _DRIVE_OPEN_ID.search(s)
+    if m:
+        return m.group(1)
+
+    # allow raw id
+    if re.fullmatch(r"[a-zA-Z0-9_-]{20,}", s):
+        return s
+
+    return None
+
+def gdrive_urls(file_id: str) -> dict:
+    return {
+        "view_url": f"https://drive.google.com/file/d/{file_id}/view",
+        "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
+        "download_url": f"https://drive.google.com/uc?export=download&id={file_id}",
+    }
+
 
 # Tutor root
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,38 +240,38 @@ _TEX_RUN = re.compile(
     r"(?:\\[A-Za-z]+(?:\{[^}]*\})*[A-Za-z0-9{}\[\]_^%:+\-*/().=,]*)+"
 )
 
-def translate_latex(val: str) -> str:
-    if "\\" not in val and "$" not in val:
-        return val
-
-    s = val
-
-    # 1) Normalize \( \) and \[ \] into $ and $$ (Streamlit-friendly)
-    s = re.sub(r"\\\((.*?)\\\)", r"$\1$", s, flags=re.DOTALL)
-    s = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", s, flags=re.DOTALL)
-
-    # 2) Wrap bare TeX commands (e.g., \text{C}_2\text{H}_2\text{O}_4) in $...$
-    #    but ONLY outside existing $...$ / $$...$$ regions.
-    parts = _MATH_BLOCK_OR_INLINE.split(s)
-
-    def wrap_tex_runs(text: str) -> str:
-        def repl(m: re.Match) -> str:
-            expr = m.group(0)
-
-            # keep trailing punctuation outside the $...$
-            m2 = re.match(r"^(.*?)([.,;:!?)]*)$", expr)
-            core, punct = m2.group(1), m2.group(2)
-
-            return f"${core}$" + punct
-
-        return _TEX_RUN.sub(repl, text)
-
-    for i in range(len(parts)):
-        # Even indices are outside math (because split keeps the delimiters)
-        if i % 2 == 0:
-            parts[i] = wrap_tex_runs(parts[i])
-
-    return "".join(parts)
+# def translate_latex(val: str) -> str:
+#     if "\\" not in val and "$" not in val:
+#         return val
+#
+#     s = val
+#
+#     # 1) Normalize \( \) and \[ \] into $ and $$ (Streamlit-friendly)
+#     s = re.sub(r"\\\((.*?)\\\)", r"$\1$", s, flags=re.DOTALL)
+#     s = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", s, flags=re.DOTALL)
+#
+#     # 2) Wrap bare TeX commands (e.g., \text{C}_2\text{H}_2\text{O}_4) in $...$
+#     #    but ONLY outside existing $...$ / $$...$$ regions.
+#     parts = _MATH_BLOCK_OR_INLINE.split(s)
+#
+#     def wrap_tex_runs(text: str) -> str:
+#         def repl(m: re.Match) -> str:
+#             expr = m.group(0)
+#
+#             # keep trailing punctuation outside the $...$
+#             m2 = re.match(r"^(.*?)([.,;:!?)]*)$", expr)
+#             core, punct = m2.group(1), m2.group(2)
+#
+#             return f"${core}$" + punct
+#
+#         return _TEX_RUN.sub(repl, text)
+#
+#     for i in range(len(parts)):
+#         # Even indices are outside math (because split keeps the delimiters)
+#         if i % 2 == 0:
+#             parts[i] = wrap_tex_runs(parts[i])
+#
+#     return "".join(parts)
 
 JINJA_VAR = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 
@@ -351,6 +387,12 @@ def validate_questions_schema(obj: dict):
         ci = q.get("correct_index")
         if not isinstance(ci, int) or not (0 <= ci <= 3):
             raise ValueError(f"Question {i}: correct_index must be 0..3")
+
+def is_interactive_response(val) -> bool:
+    return isinstance(val, (dict, list))
+
+def is_notes_response(val) -> bool:
+    return isinstance(val, str) and val.strip() != ""
 
 def template_expects_json(tpl_system_prompt: str) -> bool:
     if not tpl_system_prompt:
@@ -486,41 +528,181 @@ def publish_dialog():
             st.rerun()
         return
 
-    st.markdown("### Publish the latest AI response")
+    st.markdown("### Publish the latest output")
 
     title = st.text_input("Title")
-    subject = st.text_input("Subject", "Chemistry")
-    grade = st.text_input("Grade", "9")
-    content_type = st.selectbox("Type", ["questions", "notes", "practice", "explanation"])
+    subject = st.text_input("Subject", "Math")
+    grade = st.text_input("Grade", "All")
 
     st.divider()
 
-    with st.expander("🔍 Preview content"):
-        if isinstance(ss.last_response, (dict, list)):
+    # ---- Preview ----
+    with st.expander("🔍 Preview", expanded=True):
+        if is_interactive_response(ss.last_response):
+            st.caption("Detected: **Interactive (JSON)**")
             st.json(ss.last_response)
         else:
-            st.markdown(translate_latex(ss.last_response))
+            st.caption("Detected: **Notes (text)**")
+            st.markdown(translate_latex(str(ss.last_response)))
 
-    c1, c2 = st.columns(2)
+    st.divider()
 
-    with c1:
-        if st.button("📤 Publish"):
-            if not title.strip():
-                st.error("Title is required.")
-            else:
-                publish_item(
-                    title=title,
-                    subject=subject,
-                    grade=grade,
-                    content_type=content_type,
-                    content=ss.last_response
-                )
-                st.success("Published to Student App! 🎉")
+    # ---- Publishing paths ----
+    if is_interactive_response(ss.last_response):
+        st.subheader("Interactive publishing (Google Drive → TutorAssist / Interactives)")
+        st.caption("Step 1: Download the JSON. Step 2: Upload to Drive folder TutorAssist/Interactives. Step 3: Paste the share link.")
+
+        json_bytes = json.dumps(ss.last_response, ensure_ascii=False, indent=2).encode("utf-8")
+        default_filename = re.sub(r"[^A-Za-z0-9_-]+", "_", title.strip() or "interactive")[:80] + ".json"
+
+        st.download_button(
+            "⬇️ Download JSON",
+            data=json_bytes,
+            file_name=default_filename,
+            mime="application/json",
+            width="stretch"
+        )
+
+        link = st.text_input("Google Drive share link (or file id)")
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("Cancel", width="stretch"):
                 st.rerun()
 
-    with c2:
-        if st.button("Cancel"):
-            st.rerun()
+        with c2:
+            if st.button("📤 Publish Interactive", width="stretch"):
+                if not title.strip():
+                    st.error("Title is required.")
+                    return
+
+                file_id = extract_gdrive_file_id(link)
+                if not file_id:
+                    st.error("Could not extract a Google Drive file id from that link.")
+                    return
+
+                urls = gdrive_urls(file_id)
+
+                payload = {
+                    "provider": "gdrive",
+                    "folder": "Interactives",
+                    "file_id": file_id,
+                    "filename": default_filename,
+                    "view_url": urls["view_url"],
+                    "download_url": urls["download_url"],
+                }
+
+                publish_item(
+                    title=title.strip(),
+                    subject=subject.strip(),
+                    grade=grade.strip(),
+                    content_type="interactive",
+                    content=payload
+                )
+
+                st.toast("Published interactive to student library", icon="📤")
+                st.rerun()
+
+    else:
+        st.subheader("Notes publishing (PDF → Google Drive → TutorAssist / PDFs)")
+        st.caption("Step 1: Generate/download the PDF. Step 2: Upload to Drive folder TutorAssist/PDFs. Step 3: Paste the share link.")
+
+        # Build a PDF in memory or to disk; simplest is disk using your existing FPDF approach
+        default_pdf_name = re.sub(r"[^A-Za-z0-9_-]+", "_", title.strip() or "notes")[:80] + ".pdf"
+
+        if st.button("🧾 Generate PDF (local)", width="stretch"):
+            if not title.strip():
+                st.error("Title is required before generating a PDF.")
+            else:
+                save_file = PDF_DIR / default_pdf_name
+
+                pdf = FPDF()
+                pdf.set_auto_page_break(auto=True, margin=15)
+                pdf.add_page()
+
+                pdf.add_font("DejaVu", "", str(FONT_PATH), uni=True)
+                pdf.set_font("DejaVu", "", 16)
+                pdf.cell(200, 10, title.strip(), ln=True, align="C")
+                pdf.ln()
+
+                pdf.set_font("DejaVu", "", 12)
+                pdf.multi_cell(0, 8, str(ss.last_response))
+
+                pdf.output(str(save_file))
+                ss.generated_pdf_path = str(save_file)
+                st.toast("PDF generated", icon="📄")
+                st.rerun()
+
+        if ss.get("generated_pdf_path"):
+            p = Path(ss.generated_pdf_path)
+            if p.exists():
+                st.download_button(
+                    "⬇️ Download PDF",
+                    data=p.read_bytes(),
+                    file_name=p.name,
+                    mime="application/pdf",
+                    width="stretch"
+                )
+
+        link = st.text_input("Google Drive share link (or file id)", key="pdf_drive_link")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Cancel", width="stretch"):
+                ss.pop("generated_pdf_path", None)
+                st.rerun()
+
+        with c2:
+            if st.button("📤 Publish PDF", width="stretch"):
+                if not title.strip():
+                    st.error("Title is required.")
+                    return
+
+                file_id = extract_gdrive_file_id(link)
+                if not file_id:
+                    st.error("Could not extract a Google Drive file id from that link.")
+                    return
+
+                urls = gdrive_urls(file_id)
+
+                payload = {
+                    "provider": "gdrive",
+                    "folder": "PDFs",
+                    "file_id": file_id,
+                    "filename": default_pdf_name,
+                    "preview_url": urls["preview_url"],
+                    "view_url": urls["view_url"],
+                }
+
+                publish_item(
+                    title=title.strip(),
+                    subject=subject.strip(),
+                    grade=grade.strip(),
+                    content_type="pdf",
+                    content=payload
+                )
+
+                ss.pop("generated_pdf_path", None)
+                st.toast("Published PDF to student library", icon="📤")
+                st.rerun()
+
+def render_latest_preview():
+    if not ss.get("last_response"):
+        return
+
+    st.markdown("## ✅ Latest Output Preview")
+
+    with st.container(border=True):
+
+        if is_interactive_response(ss.last_response):
+            st.caption("Detected: **Interactive (JSON)**")
+            render_interactive_questions(ss.last_response)
+            # st.json(ss.last_response)
+        else:
+            st.caption("Detected: **Notes (text)**")
+            st.markdown(translate_latex(str(ss.last_response)))
+
+    st.divider()
 
 # Rendering prompts page
 
@@ -767,6 +949,8 @@ if ss.pending_prompt:
         if json_ok:
             ss.last_response = parsed
             st.success("✅ Valid worksheet JSON generated.")
+
+            render_latest_preview()
 
     # Clear template overrides
     ss.template_system = None

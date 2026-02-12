@@ -7,11 +7,47 @@ import qrcode
 import json
 from pathlib import Path
 import shutil
+import re
 
 from shared.formulas import show_formulas
 from published_manager import show_published_manager
 from tutortrack.lessons import get_conn
 from shared.published_db import publish_item
+
+_DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
+_DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
+_DRIVE_OPEN_ID = re.compile(r"/open\?id=([a-zA-Z0-9_-]+)")
+
+def extract_gdrive_file_id(url_or_id: str) -> str | None:
+    if not url_or_id:
+        return None
+    s = url_or_id.strip()
+
+    m = _DRIVE_FILE_ID.search(s)
+    if m:
+        return m.group(1)
+
+    m = _DRIVE_UC_ID.search(s)
+    if m:
+        return m.group(1)
+
+    m = _DRIVE_OPEN_ID.search(s)
+    if m:
+        return m.group(1)
+
+    # allow raw id
+    if re.fullmatch(r"[a-zA-Z0-9_-]{20,}", s):
+        return s
+
+    return None
+
+def gdrive_urls(file_id: str) -> dict:
+    return {
+        "view_url": f"https://drive.google.com/file/d/{file_id}/view",
+        "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
+        "download_url": f"https://drive.google.com/uc?export=download&id={file_id}",
+    }
+
 
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
@@ -167,26 +203,53 @@ def rename_pdf_dialog(old_name: str, pdf_folder: str):
             ss.pop("rename_target", None)
             st.rerun()
 
-def publish_pdf_resource(filename, source_folder):
-    src = Path(source_folder) / filename
-    PUBLISHED_PDF_DIR.mkdir(parents=True, exist_ok=True)
-
-    dst = PUBLISHED_PDF_DIR / filename
-
-    # Copy (overwrite if exists)
-    shutil.copy2(src, dst)
-
-    payload = {
-        "filename": filename
-    }
-
-    publish_item(
-        title=Path(filename).stem,
-        subject="Notes",
-        grade="All",
-        content_type="pdf",
-        content=payload
+@st.dialog("📤 Publish PDF to TutorAssist (Google Drive)")
+def publish_pdf_dialog(filename: str):
+    st.markdown(
+        "1) Upload the PDF to Google Drive folder: **TutorAssist / PDFs**  \n"
+        "2) Set sharing to **Viewer / Anyone with the link**  \n"
+        "3) Paste the share link (or file id) below."
     )
+    st.caption("Tip: test the link in an Incognito window to confirm students can view it.")
+
+    title = st.text_input("Title", value=Path(filename).stem)
+    subject = st.text_input("Subject", value="Notes")
+    grade = st.text_input("Grade", value="All")
+    link = st.text_input("Google Drive share link (or file id)")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancel", width="stretch"):
+            st.rerun()
+
+    with c2:
+        if st.button("✅ Publish", width="stretch"):
+            file_id = extract_gdrive_file_id(link)
+            if not file_id:
+                st.error("Could not extract a Google Drive file id from that link.")
+                return
+
+            urls = gdrive_urls(file_id)
+
+            payload = {
+                "provider": "gdrive",
+                "folder": "PDFs",
+                "file_id": file_id,
+                "filename": filename,
+                "preview_url": urls["preview_url"],
+                "view_url": urls["view_url"],
+            }
+
+            publish_item(
+                title=title.strip(),
+                subject=subject.strip(),
+                grade=grade.strip(),
+                content_type="pdf",
+                content=payload
+            )
+
+            st.toast("Published PDF to student library", icon="📤")
+            st.rerun()
 
 def resources_pdf_viewer():
 
@@ -234,7 +297,7 @@ def resources_pdf_viewer():
             ss["rename_target"] = filename
 
         elif choice == "📤":
-            publish_pdf_resource(filename, pdf_folder)
+            publish_pdf_dialog(filename)
             st.toast("Published to student library", icon="📤")
 
         # reset selection back to neutral

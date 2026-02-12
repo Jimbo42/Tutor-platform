@@ -88,8 +88,12 @@ with st.sidebar:
         st.rerun()
 
 pages = {
+    "Home": [
+        st.Page("home.py", title="Home", default=True),
+    ],
     "Math Skills Challenges": [
-        st.Page("math_skills.py", title="Factoring"),
+        st.Page("math_factoring.py", title="Factoring"),
+        st.Page("math_numeracy.py", title="NumerAce"),
     ],
     "Library": [
         st.Page("practice.py", title="Practice Questions"),

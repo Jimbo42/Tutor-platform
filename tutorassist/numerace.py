@@ -1,0 +1,614 @@
+# numerace.py
+import random
+import time
+import math
+import streamlit as st
+from streamlit import session_state as ss
+from streamlit_autorefresh import st_autorefresh
+
+# ------------------------------------------------------------
+# Config (tune these later / per difficulty)
+# ------------------------------------------------------------
+SEGMENTS_PER_ROUND = 8
+
+ROUND_SECONDS_DEFAULT = 90          # total time to finish 8 correct answers
+QUESTION_SECONDS_DEFAULT = 10        # time per question
+FEEDBACK_SECONDS_DEFAULT = 3.5      # paused feedback display time (excluded from round timer)
+
+AUTOREFRESH_MS = 400                # UI tick rate
+
+# ------------------------------------------------------------
+# Helpers: session-state init
+# ------------------------------------------------------------
+def ss_init():
+    if "nr_initialized" in ss:
+        return
+
+    ss.nr_initialized = True
+
+    ss.nr_segments = SEGMENTS_PER_ROUND
+    ss.nr_round_seconds = ROUND_SECONDS_DEFAULT
+    ss.nr_question_seconds = QUESTION_SECONDS_DEFAULT
+    ss.nr_feedback_seconds = FEEDBACK_SECONDS_DEFAULT
+
+    ss.nr_round_id = 1
+    ss.nr_correct_in_round = 0
+
+    # NEW: start idle until user clicks "Start round"
+    ss.nr_state = "idle"   # idle | answering | feedback | round_complete
+
+    # timers (not running yet)
+    ss.nr_round_started_at = None
+    ss.nr_round_paused_accum = 0.0
+    ss.nr_round_pause_started_at = None
+
+    ss.nr_q_started_at = None
+
+    # current question payload (none until start)
+    ss.nr_q = None
+    ss.nr_last_choice = None
+    ss.nr_feedback = None
+    ss.nr_feedback_started_at = None
+    ss.nr_no_refresh_until = 0.0
+
+    # optional: stats
+    ss.nr_attempts_total = 0
+    ss.nr_correct_total = 0
+
+    # Round breakdown
+    ss.nr_incorrect_in_round = 0
+    ss.nr_missed_in_round = 0
+
+    # Totals breakdown
+    ss.nr_incorrect_total = 0
+    ss.nr_missed_total = 0
+
+
+def clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+
+def suppress_autorefresh(seconds: float = 0.35):
+    ss.nr_no_refresh_until = time.time() + seconds
+
+def start_round():
+    """Start (or restart) the timers and load the first question."""
+    now = time.time()
+
+    ss.nr_state = "answering"
+    ss.nr_round_started_at = now
+    ss.nr_round_paused_accum = 0.0
+    ss.nr_round_pause_started_at = None
+
+    ss.nr_q_started_at = now
+    ss.nr_q = make_question()
+    suppress_autorefresh(0.35)
+
+    ss.nr_last_choice = None
+    ss.nr_feedback = None
+    ss.nr_feedback_started_at = None
+
+    ss.nr_incorrect_in_round = 0
+    ss.nr_missed_in_round = 0
+
+
+
+def reset_round():
+    ss.nr_correct_in_round = 0
+
+    # back to idle — user must click Start
+    ss.nr_state = "idle"
+
+    ss.nr_round_started_at = None
+    ss.nr_round_paused_accum = 0.0
+    ss.nr_round_pause_started_at = None
+
+    ss.nr_q_started_at = None
+    ss.nr_q = None
+
+    ss.nr_last_choice = None
+    ss.nr_feedback = None
+    ss.nr_feedback_started_at = None
+
+    ss.nr_incorrect_in_round = 0
+    ss.nr_missed_in_round = 0
+
+def start_feedback_pause():
+    """Enter feedback state; exclude this time from the round timer."""
+    now = time.time()
+
+    ss.nr_state = "feedback"
+    ss.nr_feedback_started_at = now
+
+    # start excluding from round timer
+    ss.nr_round_pause_started_at = now
+
+
+def end_feedback_pause_and_advance():
+    """Leave feedback state, add excluded time to accumulator, and advance to next question or end round."""
+    now = time.time()
+
+    # accumulate excluded time
+    if ss.nr_round_pause_started_at is not None:
+        ss.nr_round_paused_accum += (now - ss.nr_round_pause_started_at)
+        ss.nr_round_pause_started_at = None
+
+    # if round complete, stop; else next question
+    if ss.nr_correct_in_round >= ss.nr_segments:
+        ss.nr_state = "round_complete"
+        return
+
+    ss.nr_state = "answering"
+    ss.nr_q_started_at = now
+    ss.nr_q = make_question()
+    suppress_autorefresh(0.35)
+
+    ss.nr_last_choice = None
+    ss.nr_feedback = None
+    ss.nr_feedback_started_at = None
+
+
+# ------------------------------------------------------------
+# Timers
+# ------------------------------------------------------------
+def round_time_elapsed_active(now: float) -> float:
+    """Round timer counts only while 'answering' (feedback time is excluded)."""
+    if ss.nr_round_started_at is None:
+        return 0.0  # idle / not started yet
+
+    paused_extra = ss.nr_round_paused_accum
+
+    # If currently in feedback, also exclude the currently-running pause segment
+    if ss.nr_round_pause_started_at is not None:
+        paused_extra += (now - ss.nr_round_pause_started_at)
+
+    return (now - ss.nr_round_started_at) - paused_extra
+
+
+def round_time_left(now: float) -> float:
+    # If idle/not started, show full time remaining
+    if ss.nr_round_started_at is None:
+        return float(ss.nr_round_seconds)
+    return ss.nr_round_seconds - round_time_elapsed_active(now)
+
+
+def question_time_left(now: float) -> float:
+    # If idle/not started, show full time remaining
+    if ss.nr_q_started_at is None:
+        return float(ss.nr_question_seconds)
+    return ss.nr_question_seconds - (now - ss.nr_q_started_at)
+
+# ------------------------------------------------------------
+# Question generation
+# ------------------------------------------------------------
+def eval_expr(expr: str) -> int:
+    # Safe enough for controlled generation
+    return int(eval(expr))
+
+
+def gen_which_sum_larger():
+    # Example: -23 + 45  OR  79 - 61
+    a = random.randint(-60, 60)
+    b = random.randint(-60, 60)
+    c = random.randint(-60, 60)
+    d = random.randint(-60, 60)
+
+    # bias toward +/- operations
+    left = f"{a} + {b}"
+    right = f"{c} - {d}"
+
+    lv = eval_expr(left)
+    rv = eval_expr(right)
+
+    prompt = "Which sum is larger?"
+    choices = [
+        {"label": left, "value": lv},
+        {"label": right, "value": rv},
+    ]
+    correct_index = 0 if lv > rv else 1 if rv > lv else random.randint(0, 1)  # tie-break
+    explain = f"{left} = {lv} ; {right} = {rv}"
+    return prompt, choices, correct_index, explain
+
+
+def gen_which_product_smaller():
+    # Example: 11 * 8 OR 7 * 12
+    a = random.randint(2, 14)
+    b = random.randint(2, 14)
+    c = random.randint(2, 14)
+    d = random.randint(2, 14)
+
+    left = f"{a} * {b}"
+    right = f"{c} * {d}"
+
+    lv = eval_expr(left)
+    rv = eval_expr(right)
+
+    prompt = "Which product is smaller?"
+    choices = [
+        {"label": left, "value": lv},
+        {"label": right, "value": rv},
+    ]
+    correct_index = 0 if lv < rv else 1 if rv < lv else random.randint(0, 1)
+    explain = f"{left} = {lv} ; {right} = {rv}"
+    return prompt, choices, correct_index, explain
+
+
+def gen_fraction_to_decimal_equiv():
+    # Example: Which is equivalent of 3/8? 0.375 or 0.425
+    denom = random.choice([4, 5, 8, 10, 16, 20, 25, 40])
+    num = random.randint(1, denom - 1)
+
+    exact = num / denom
+    # create a distractor near exact but not equal
+    delta = random.choice([0.01, 0.02, 0.03, 0.05, 0.08])
+    distractor = exact + random.choice([-delta, delta])
+    distractor = max(0.0, min(1.0, distractor))
+
+    # format nicely
+    exact_s = f"{exact:.3f}".rstrip("0").rstrip(".")
+    dist_s = f"{distractor:.3f}".rstrip("0").rstrip(".")
+
+    prompt = f"Which is equivalent to the fraction {num}/{denom} ?"
+    # randomize which side is correct
+    if random.random() < 0.5:
+        labels = [exact_s, dist_s]
+        correct_index = 0
+    else:
+        labels = [dist_s, exact_s]
+        correct_index = 1
+
+    choices = [{"label": labels[0], "value": float(labels[0])},
+               {"label": labels[1], "value": float(labels[1])}]
+
+    explain = f"{num}/{denom} = {exact_s}"
+    return prompt, choices, correct_index, explain
+
+
+def gen_three_choice_variant():
+    # simple 3-choice example: "Which is closest to 1/3?"
+    exact = 1/3
+    opts = [exact, exact + 0.05, exact - 0.04]
+    random.shuffle(opts)
+
+    labels = [f"{x:.3f}".rstrip("0").rstrip(".") for x in opts]
+    correct_index = labels.index(f"{exact:.3f}".rstrip("0").rstrip("."))
+
+    prompt = "Which is closest to 1/3 ?"
+    choices = [{"label": labels[i], "value": float(labels[i])} for i in range(3)]
+    explain = f"1/3 ≈ {exact:.3f}".rstrip("0").rstrip(".")
+    return prompt, choices, correct_index, explain
+
+
+def make_question():
+    # Expand this list as you add types/difficulty scaling
+    generators = [
+        gen_which_sum_larger,
+        gen_which_product_smaller,
+        gen_fraction_to_decimal_equiv,
+        gen_three_choice_variant,
+    ]
+    prompt, choices, correct_index, explain = random.choice(generators)()
+    return {
+        "prompt": prompt,
+        "choices": choices,
+        "correct_index": correct_index,
+        "explain": explain,
+    }
+
+
+# ------------------------------------------------------------
+# Game logic
+# ------------------------------------------------------------
+def handle_timeout_if_needed(now: float):
+
+    if ss.nr_state != "answering":
+        return
+
+    # Round timeout ends the round
+    if round_time_left(now) <= 0:
+        ss.nr_state = "round_complete"
+        ss.nr_feedback = None
+        ss.nr_feedback_started_at = None
+        ss.nr_round_pause_started_at = None
+        return
+
+    # Question timeout counts as a MISS (not incorrect), shows feedback, then advances
+    if question_time_left(now) <= 0:
+        ss.nr_attempts_total += 1
+        ss.nr_last_choice = None
+
+        ss.nr_missed_in_round += 1
+        ss.nr_missed_total += 1
+
+        ss.nr_feedback = {
+            "kind": "miss",  # NEW: lets UI label it as missed
+            "is_correct": False,
+            "msg": "⏱️ Missed (no answer)",
+            "correct_label": ss.nr_q["choices"][ss.nr_q["correct_index"]]["label"],
+            "explain": ss.nr_q["explain"],
+        }
+        start_feedback_pause()
+        return
+
+def submit_answer(choice_index: int):
+    if ss.nr_state != "answering":
+        return
+
+    ss.nr_attempts_total += 1
+    ss.nr_last_choice = choice_index
+
+    correct = (choice_index == ss.nr_q["correct_index"])
+    if correct:
+        ss.nr_correct_total += 1
+        ss.nr_correct_in_round += 1
+    else:
+        ss.nr_incorrect_in_round += 1
+        ss.nr_incorrect_total += 1
+
+    correct_label = ss.nr_q["choices"][ss.nr_q["correct_index"]]["label"]
+    ss.nr_feedback = {
+        "kind": "answer",  # NEW
+        "is_correct": correct,
+        "msg": "✅ Correct!" if correct else "❌ Incorrect",
+        "correct_label": correct_label,
+        "explain": ss.nr_q["explain"],
+    }
+    start_feedback_pause()
+
+def tick_feedback(now: float):
+    if ss.nr_state != "feedback":
+        return
+
+    if (now - ss.nr_feedback_started_at) >= ss.nr_feedback_seconds:
+        end_feedback_pause_and_advance()
+
+def render_linear_track(completed: int, total: int):
+    """
+    Draw 8 (or N) horizontal segments. Completed segments are filled.
+    """
+    segs = []
+    for i in range(total):
+        segs.append("nr-seg-on" if i < completed else "nr-seg-off")
+
+    st.markdown(
+        """
+        <style>
+        .nr-track {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 4px 18px 4px;
+        }
+        .nr-seg {
+            height: 14px;
+            width: 90px;
+            border-radius: 999px;
+            border: 1px solid rgba(15, 23, 42, 0.18);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+        }
+        .nr-seg-on  { background: #22c55e; opacity: 1.0; }
+        .nr-seg-off { background: #94a3b8; opacity: 0.25; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    html = "<div class='nr-track'>" + "".join([f"<div class='nr-seg {c}'></div>" for c in segs]) + "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# UI
+# ------------------------------------------------------------
+def numerace_app():
+
+    st.set_page_config(page_title="NumeRace", layout="wide")
+    ss_init()
+
+    now = time.time()
+
+    # Only tick/refresh while actively playing
+    if ss.nr_state in ("answering", "feedback"):
+        # Do not refresh during the brief stabilization window after a new question appears
+        if time.time() >= ss.nr_no_refresh_until:
+            st_autorefresh(interval=AUTOREFRESH_MS, key="nr_tick")
+        handle_timeout_if_needed(now)
+        tick_feedback(now)
+
+    # ------------------------------------------------------------
+    # Top header + styles
+    # ------------------------------------------------------------
+    st.markdown(
+        """
+        <style>
+        .nr-title { font-size: 34px; font-weight: 800; letter-spacing: 0.5px; }
+        .nr-sub { font-size: 14px; opacity: 0.8; margin-top: -6px; }
+
+        .nr-card { border: 1px solid rgba(15, 23, 42, 0.15); border-radius: 18px; padding: 18px; }
+        .nr-qwrap{ max-width: 900px; margin-left:auto; margin-right:auto; }
+
+        .nr-prompt{ text-align:center; font-size: 22px; font-weight: 700; margin-bottom: 10px; }
+        .nr-timer { font-size: 16px; font-weight: 700; }
+        .nr-muted { opacity: 0.75; }
+
+        /* Make header button a bit tighter */
+        div[data-testid="stButton"] > button { border-radius: 12px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Header: Title | Round timer | Start/Next button
+    h1, h2, h3 = st.columns([2.2, 2.4, 1.2], vertical_alignment="center")
+
+    with h1:
+        st.markdown("<div class='nr-title'>🏁 NumeRace</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='nr-sub'>Round #{ss.nr_round_id} • "
+            f"Questions: {ss.nr_correct_in_round}/{ss.nr_segments}</div>",
+            unsafe_allow_html=True
+        )
+
+    # Round progress (no seconds text)
+    rt = max(0.0, round_time_left(now))
+    with h2:
+        st.markdown("<div class='nr-timer'>⏱️ Round</div>", unsafe_allow_html=True)
+        round_frac = clamp01((ss.nr_round_seconds - rt) / ss.nr_round_seconds)
+        st.progress(round_frac)
+
+    # Header control button (Start / Next)
+    with h3:
+        if ss.nr_state == "idle":
+            if st.button("🏁 Start round", use_container_width=True):
+                start_round()
+                st.rerun()
+        elif ss.nr_state == "round_complete":
+            if st.button("➡️ Next round", use_container_width=True):
+                ss.nr_round_id += 1
+                reset_round()
+                st.rerun()
+        else:
+            st.write("")
+
+    st.divider()
+
+    # ------------------------------------------------------------
+    # Track row with Cancel on the left
+    # ------------------------------------------------------------
+    track_left, track_mid, track_right = st.columns([1.2, 6, 1.2], vertical_alignment="center")
+
+    with track_left:
+        if ss.nr_state in ("answering", "feedback"):
+            if st.button("🛑 Cancel", use_container_width=True):
+                ss.nr_state = "round_complete"
+                ss.nr_feedback = None
+                ss.nr_feedback_started_at = None
+                ss.nr_round_pause_started_at = None
+                st.rerun()
+        else:
+            st.write("")
+
+    with track_mid:
+        render_linear_track(ss.nr_correct_in_round, ss.nr_segments)
+
+    with track_right:
+        st.write("")
+
+    # ------------------------------------------------------------
+    # Center question container
+    # ------------------------------------------------------------
+    st.markdown("<div class='nr-card'><div class='nr-qwrap'>", unsafe_allow_html=True)
+
+    # Idle screen (no start button here—it's in the header)
+    if ss.nr_state == "idle":
+        st.markdown("<div class='nr-prompt'>Ready to race?</div>", unsafe_allow_html=True)
+        st.markdown("<div class='nr-muted' style='text-align:center;'>Press <b>Start round</b> in the header.</div>",
+                    unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+        # Optional settings expander still visible in idle
+        with st.expander("⚙️ NumeRace settings (temporary)", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ss.nr_round_seconds = st.slider("Round seconds", 20, 180, ss.nr_round_seconds)
+            with c2:
+                ss.nr_question_seconds = st.slider("Question seconds", 3, 20, ss.nr_question_seconds)
+            with c3:
+                ss.nr_feedback_seconds = st.slider("Feedback seconds", 1, 6, int(ss.nr_feedback_seconds))
+            st.caption("These will become difficulty presets later.")
+        return
+
+    # Round complete summary (Total / Correct / Incorrect / Missed)
+    if ss.nr_state == "round_complete":
+        st.markdown("<div class='nr-prompt'>🎉 Round complete!</div>", unsafe_allow_html=True)
+
+        total_q = ss.nr_correct_in_round + ss.nr_incorrect_in_round + ss.nr_missed_in_round
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Total questions", total_q)
+        with c2:
+            st.metric("Correct", ss.nr_correct_in_round)
+        with c3:
+            st.metric("Incorrect", ss.nr_incorrect_in_round)
+        with c4:
+            st.metric("Missed", ss.nr_missed_in_round)
+
+        st.markdown("<div class='nr-muted' style='text-align:center;'>Press <b>Next round</b> in the header when ready.</div>",
+                    unsafe_allow_html=True)
+
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+        with st.expander("⚙️ NumeRace settings (temporary)", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ss.nr_round_seconds = st.slider("Round seconds", 20, 180, ss.nr_round_seconds)
+            with c2:
+                ss.nr_question_seconds = st.slider("Question seconds", 3, 20, ss.nr_question_seconds)
+            with c3:
+                ss.nr_feedback_seconds = st.slider("Feedback seconds", 1, 6, int(ss.nr_feedback_seconds))
+            st.caption("These will become difficulty presets later.")
+        return
+
+    # Question timer (progress only, no seconds text)
+    if ss.nr_state == "answering":
+        qt = max(0.0, question_time_left(now))
+        q_frac = clamp01((ss.nr_question_seconds - qt) / ss.nr_question_seconds)
+        st.markdown("<div class='nr-timer'>⚡ Question</div>", unsafe_allow_html=True)
+        st.progress(q_frac)
+    else:
+        st.write("")
+
+    # Normal question
+    q = ss.nr_q
+    st.markdown(f"<div class='nr-prompt'>{q['prompt']}</div>", unsafe_allow_html=True)
+
+    # Choices + per-column feedback placeholders
+    choice_cols = st.columns(len(q["choices"]))
+    under = []
+
+    for i, ch in enumerate(q["choices"]):
+        with choice_cols[i]:
+            disabled = (ss.nr_state != "answering")
+            if st.button(
+                ch["label"],
+                key=f"nr_choice_{ss.nr_round_id}_{ss.nr_correct_in_round}_{i}",
+                use_container_width=True,
+                disabled=disabled
+            ):
+                submit_answer(i)
+                st.rerun()
+
+            under.append(st.empty())
+
+    # Per-column feedback (show calculations under ALL options; only correct is green)
+    if ss.nr_state == "feedback" and ss.nr_feedback:
+        correct_i = q["correct_index"]
+        fb = ss.nr_feedback
+
+        for i, ch in enumerate(q["choices"]):
+            calc_line = f"`{ch['label']}`  \n= **{ch['value']}**"
+
+            if i == correct_i:
+                under[i].markdown(f"✅ **Correct**  \n{calc_line}")
+            elif ss.nr_last_choice == i:
+                under[i].markdown(f"❌ **Your choice**  \n{calc_line}")
+            else:
+                under[i].markdown(f"⬜  \n{calc_line}")
+
+        remaining = max(0.0, ss.nr_feedback_seconds - (now - ss.nr_feedback_started_at))
+        st.caption(f"{fb.get('msg','')} • continuing in {remaining:0.1f}s…")
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
+
+    # Footer controls (optional)
+    with st.expander("⚙️ NumeRace settings (temporary)", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ss.nr_round_seconds = st.slider("Round seconds", 20, 180, ss.nr_round_seconds)
+        with c2:
+            ss.nr_question_seconds = st.slider("Question seconds", 3, 20, ss.nr_question_seconds)
+        with c3:
+            ss.nr_feedback_seconds = st.slider("Feedback seconds", 1, 6, int(ss.nr_feedback_seconds))
+
+        st.caption("These will become difficulty presets later.")

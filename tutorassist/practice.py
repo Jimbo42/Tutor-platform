@@ -6,6 +6,21 @@ from shared.content_renderer import (
 )
 from shared.published_db import get_published_items, get_published_item_by_id
 import json
+import requests
+
+def load_interactive_from_gdrive(payload: dict) -> dict | None:
+    url = payload.get("download_url")
+    if not url:
+        st.error("Interactive payload missing download_url.")
+        return None
+
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"Could not load interactive JSON from Google Drive: {e}")
+        return None
 
 st.title("📚 Practice Library")
 
@@ -146,18 +161,33 @@ st.caption(f"{subject} • Grade {grade} • {ctype}")
 # ----------------------------
 # Render content
 # ----------------------------
-content_str = content.strip()
+content_str = (content or "").strip()
 
 if content_str.startswith("{"):
     try:
         data = json.loads(content_str)
 
-        if isinstance(data, dict) and data.get("type") == "questions":
+        # ✅ NEW: Drive-backed interactive payload
+        if (ctype or "").lower() == "interactive" and isinstance(data, dict) and data.get("provider") == "gdrive":
+            worksheet = load_interactive_from_gdrive(data)
+
+            if worksheet and isinstance(worksheet, dict) and worksheet.get("type") == "questions":
+                render_interactive_questions(worksheet)
+            elif worksheet:
+                st.warning("Downloaded JSON is not a questions worksheet; showing raw JSON.")
+                st.json(worksheet)
+            else:
+                # already showed error
+                st.json(data)
+
+        # Existing behavior: raw worksheet JSON stored directly
+        elif isinstance(data, dict) and data.get("type") == "questions":
             render_interactive_questions(data)
+
         else:
             st.json(data)
 
-    except Exception as e:
+    except Exception:
         st.error("This content looks like JSON but could not be parsed.")
         st.markdown(translate_latex(content), unsafe_allow_html=True)
 
