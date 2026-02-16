@@ -685,4 +685,4 @@ elif ss.configMode == "Numeracy Admin":
 
 elif ss.configMode == "User/Password":
     from shared.auth import hash_password
-    print(hash_password("Earth*99"))
+    print(hash_password(st.text_input("Password", type="password")))
