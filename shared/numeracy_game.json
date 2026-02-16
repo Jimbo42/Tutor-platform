@@ -1,0 +1,640 @@
+{
+  "meta": {
+    "version": 1,
+    "title": "NumeRace Numeracy Game"
+  },
+  "rules": {
+    "segments_per_round": 8,
+    "round_seconds": 90,
+    "question_seconds": 10,
+    "feedback_seconds": 3.5,
+    "shuffle_choices": true
+  },
+  "limits": {
+    "math_ops": [
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "round"
+    ],
+    "logic_ops": [
+      "gt",
+      "lt",
+      "eq",
+      "and",
+      "or",
+      "not",
+      "ne"
+    ]
+  },
+  "selection": {
+    "cooldown_default": 1
+  },
+  "questions": [
+    {
+      "id": "q_9f3c2a1b",
+      "title": "Which sum is larger?",
+      "enabled": true,
+      "selection": {
+        "weight": 5,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": -60,
+          "max": 60
+        },
+        "b": {
+          "kind": "int",
+          "min": -60,
+          "max": 60
+        },
+        "c": {
+          "kind": "int",
+          "min": -60,
+          "max": 60
+        },
+        "d": {
+          "kind": "int",
+          "min": -60,
+          "max": 60
+        }
+      },
+      "derived": {
+        "left_val": {
+          "op": "add",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "right_val": {
+          "op": "sub",
+          "args": [
+            "$c",
+            "$d"
+          ]
+        }
+      },
+      "prompt": "Which sum is larger?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$a}} + {{expr:$b}}",
+            "value": "$left_val"
+          },
+          {
+            "label": "{{expr:$c}} - {{expr:$d}}",
+            "value": "$right_val"
+          }
+        ]
+      },
+      "answer": {
+        "mode": "argmax",
+        "field": "value",
+        "tie_break": "random"
+      },
+      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}"
+    },
+    {
+      "id": "q_9f3d2a2c",
+      "title": "Which product is smaller?",
+      "enabled": true,
+      "selection": {
+        "weight": 4,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        },
+        "b": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        },
+        "c": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        },
+        "d": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        }
+      },
+      "derived": {
+        "left_val": {
+          "op": "mul",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "right_val": {
+          "op": "mul",
+          "args": [
+            "$c",
+            "$d"
+          ]
+        }
+      },
+      "prompt": "Which product is smaller?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$a}} × {{expr:$b}}",
+            "value": "$left_val"
+          },
+          {
+            "label": "{{expr:$c}} × {{expr:$d}}",
+            "value": "$right_val"
+          }
+        ]
+      },
+      "answer": {
+        "mode": "argmin",
+        "field": "value",
+        "tie_break": "random"
+      },
+      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}"
+    },
+    {
+      "id": "q_2g3c2a4c",
+      "title": "Fraction to decimal - 2 choices",
+      "enabled": true,
+      "selection": {
+        "weight": 3.0,
+        "cooldown": 0,
+        "max_per_round": 999
+      },
+      "vars": {
+        "denom": {
+          "kind": "choice",
+          "values": [
+            4,
+            5,
+            8,
+            10,
+            16,
+            20,
+            25,
+            40
+          ]
+        },
+        "num": {
+          "kind": "int",
+          "min": 1,
+          "max": 39
+        }
+      },
+      "constraints": [
+        {
+          "op": "lt",
+          "args": [
+            "$num",
+            "$denom"
+          ]
+        }
+      ],
+      "derived": {
+        "exact": {
+          "op": "div",
+          "args": [
+            "$num",
+            "$denom"
+          ]
+        },
+        "delta": {
+          "kind": "choice",
+          "values": [
+            0.01,
+            0.02,
+            0.03,
+            0.05,
+            0.08
+          ]
+        }
+      },
+      "prompt": "Which is equivalent to the fraction {{expr:$num}}/{{expr:$denom}} ?",
+      "choices": {
+        "mode": "two_decimal_one_distractor",
+        "exact": "$exact",
+        "delta": "$delta",
+        "round_places": 3,
+        "n_distractors": 1,
+        "clamp_01": true
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$num}}/{{expr:$denom}} = {{fmt:$exact,3}}"
+    },
+    {
+      "id": "q_6a3c16f4",
+      "title": "Which quotient is larger?",
+      "enabled": true,
+      "selection": {
+        "weight": 4.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 2,
+          "max": 16
+        },
+        "b": {
+          "kind": "int",
+          "min": 6,
+          "max": 18
+        },
+        "c": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        },
+        "d": {
+          "kind": "int",
+          "min": 2,
+          "max": 14
+        }
+      },
+      "derived": {
+        "left_val": {
+          "op": "div",
+          "args": [
+            "$product_ab",
+            "$b"
+          ]
+        },
+        "right_val": {
+          "op": "div",
+          "args": [
+            "$product_cd",
+            "$d"
+          ]
+        },
+        "product_ab": {
+          "op": "mul",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "product_cd": {
+          "op": "mul",
+          "args": [
+            "$c",
+            "$d"
+          ]
+        }
+      },
+      "prompt": "Which quotient is larger?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$product_ab}} / {{expr:$b}}",
+            "value": "$left_val"
+          },
+          {
+            "label": "{{expr:$product_cd}} / {{expr:$d}}",
+            "value": "$right_val"
+          }
+        ]
+      },
+      "answer": {
+        "mode": "argmax",
+        "field": "value",
+        "tie_break": "random"
+      },
+      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}",
+      "constraints": [
+        {
+          "op": "ne",
+          "args": [
+            "$left_val",
+            "$right_val"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q_0c1519ed",
+      "title": "Fraction to decimal -  3 choices",
+      "enabled": true,
+      "selection": {
+        "weight": 3.0,
+        "cooldown": 0,
+        "max_per_round": 999
+      },
+      "vars": {
+        "denom": {
+          "kind": "choice",
+          "values": [
+            4,
+            5,
+            8,
+            10,
+            16,
+            20,
+            25,
+            40
+          ]
+        },
+        "num": {
+          "kind": "int",
+          "min": 1,
+          "max": 39
+        }
+      },
+      "constraints": [
+        {
+          "op": "lt",
+          "args": [
+            "$num",
+            "$denom"
+          ]
+        }
+      ],
+      "derived": {
+        "exact": {
+          "op": "div",
+          "args": [
+            "$num",
+            "$denom"
+          ]
+        },
+        "delta": {
+          "kind": "choice",
+          "values": [
+            0.01,
+            0.02,
+            0.03,
+            0.05,
+            0.08
+          ]
+        }
+      },
+      "prompt": "Which is equivalent to the fraction {{expr:$num}}/{{expr:$denom}} ?",
+      "choices": {
+        "mode": "two_decimal_one_distractor",
+        "exact": "$exact",
+        "delta": "$delta",
+        "round_places": 3,
+        "n_distractors": 2,
+        "clamp_01": true
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$num}}/{{expr:$denom}} = {{fmt:$exact,3}}"
+    },
+    {
+      "id": "q_7eb949f3",
+      "title": "Largest Fraction",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 0,
+        "max_per_round": 999
+      },
+      "vars": {
+        "num_1": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "num_2": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "num_3": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "denom_1": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        },
+        "denom_2": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        },
+        "denom_3": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        }
+      },
+      "derived": {
+        "frac_1": {
+          "op": "div",
+          "args": [
+            "$num_1",
+            "$denom_1"
+          ]
+        },
+        "frac_2": {
+          "op": "div",
+          "args": [
+            "$num_2",
+            "$denom_2"
+          ]
+        },
+        "frac_3": {
+          "op": "div",
+          "args": [
+            "$num_3",
+            "$denom_3"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "ne",
+          "args": [
+            "$frac_1",
+            "$frac_2"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$frac_1",
+            "$frac_3"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$frac_2",
+            "$frac_3"
+          ]
+        }
+      ],
+      "prompt": "Which is the largest Fraction?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$num_1}}/{{expr:$denom_1}}",
+            "value": "$frac_1"
+          },
+          {
+            "label": "{{expr:$num_2}}/{{expr:$denom_2}}",
+            "value": "$frac_2"
+          },
+          {
+            "label": "{{expr:$num_3}}/{{expr:$denom_3}}",
+            "value": "$frac_3"
+          }
+        ]
+      },
+      "answer": {
+        "mode": "argmax",
+        "field": "value",
+        "tie_break": "random"
+      },
+      "explain": ""
+    },
+    {
+      "id": "q_a9411fb3",
+      "title": "Smallest Fraction",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 0,
+        "max_per_round": 999
+      },
+      "vars": {
+        "num_1": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "num_2": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "num_3": {
+          "kind": "int",
+          "min": 1,
+          "max": 9
+        },
+        "denom_1": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        },
+        "denom_2": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        },
+        "denom_3": {
+          "kind": "int",
+          "min": 3,
+          "max": 16
+        }
+      },
+      "derived": {
+        "frac_1": {
+          "op": "div",
+          "args": [
+            "$num_1",
+            "$denom_1"
+          ]
+        },
+        "frac_2": {
+          "op": "div",
+          "args": [
+            "$num_2",
+            "$denom_2"
+          ]
+        },
+        "frac_3": {
+          "op": "div",
+          "args": [
+            "$num_3",
+            "$denom_3"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "ne",
+          "args": [
+            "$frac_1",
+            "$frac_2"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$frac_1",
+            "$frac_3"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$frac_2",
+            "$frac_3"
+          ]
+        }
+      ],
+      "prompt": "Which is the smallest Fraction?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$num_1}}/{{expr:$denom_1}}",
+            "value": "$frac_1"
+          },
+          {
+            "label": "{{expr:$num_2}}/{{expr:$denom_2}}",
+            "value": "$frac_2"
+          },
+          {
+            "label": "{{expr:$num_3}}/{{expr:$denom_3}}",
+            "value": "$frac_3"
+          }
+        ]
+      },
+      "answer": {
+        "mode": "argmin",
+        "field": "value",
+        "tie_break": "random"
+      },
+      "explain": ""
+    }
+  ],
+  "_all_var_names": [
+    "num_1",
+    "denom_1",
+    "num_2",
+    "denom_2",
+    "frac_2",
+    "frac_3",
+    "denom_3",
+    "num_3",
+    "frac_1"
+  ]
+}

@@ -8,19 +8,14 @@ from shared.published_db import get_published_items, get_published_item_by_id
 import json
 import requests
 
-def load_interactive_from_gdrive(payload: dict) -> dict | None:
-    url = payload.get("download_url")
-    if not url:
-        st.error("Interactive payload missing download_url.")
-        return None
-
+@st.cache_data(show_spinner="Loading worksheet from Google Drive...")
+def load_interactive_from_gdrive(download_url: str):
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(download_url, timeout=20)
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        st.error(f"Could not load interactive JSON from Google Drive: {e}")
-        return None
+        return {"_error": str(e)}
 
 st.title("📚 Practice Library")
 
@@ -169,18 +164,27 @@ if content_str.startswith("{"):
 
         # ✅ NEW: Drive-backed interactive payload
         if (ctype or "").lower() == "interactive" and isinstance(data, dict) and data.get("provider") == "gdrive":
-            worksheet = load_interactive_from_gdrive(data)
+            download_url = data.get("download_url")
 
-            if worksheet and isinstance(worksheet, dict) and worksheet.get("type") == "questions":
-                render_interactive_questions(worksheet)
-            elif worksheet:
-                st.warning("Downloaded JSON is not a questions worksheet; showing raw JSON.")
-                st.json(worksheet)
-            else:
-                # already showed error
+            if not download_url:
+                st.error("Interactive payload missing download_url.")
                 st.json(data)
+                st.stop()
 
-        # Existing behavior: raw worksheet JSON stored directly
+            worksheet = load_interactive_from_gdrive(download_url)
+
+            if isinstance(worksheet, dict) and worksheet.get("_error"):
+                st.error(f"Could not load worksheet: {worksheet['_error']}")
+                st.json(data)
+                st.stop()
+
+            if isinstance(worksheet, dict) and worksheet.get("type") == "questions":
+                render_interactive_questions(worksheet)
+            else:
+                st.warning("Downloaded JSON is not a questions worksheet.")
+                st.json(worksheet)
+
+        # ✅ Existing direct JSON worksheet
         elif isinstance(data, dict) and data.get("type") == "questions":
             render_interactive_questions(data)
 

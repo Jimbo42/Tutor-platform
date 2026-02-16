@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+from tutortrack.math_numeracy_admin import numeracy_admin_app
+
 # ==============================
 # ChatTemplates Admin Functions
 # ==============================
@@ -512,6 +514,12 @@ with st.sidebar:
     if st.button("Import formulas"):
         ss.configMode= "Formula Import"
         title.markdown("📥 Formula Import")
+    if st.button("Numeracy Admin"):
+        ss.configMode= "Numeracy Admin"
+        title.markdown("🧮 Numeracy Admin")
+    if st.button("User/Password"):
+        ss.configMode= "User/Password"
+        title.markdown("User and password creation")
 
 if ss.configMode == "Templates":
 
@@ -671,3 +679,10 @@ elif ss.configMode == "All lessons":
 
 elif ss.configMode == "Formula Import":
     formula_csv_importer()
+
+elif ss.configMode == "Numeracy Admin":
+    numeracy_admin_app()
+
+elif ss.configMode == "User/Password":
+    from shared.auth import hash_password
+    print(hash_password("Earth*99"))

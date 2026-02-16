@@ -1,17 +1,23 @@
 import streamlit as st
 import pandas as pd
+from streamlit import session_state as ss
+
 from shared.published_db import (
     list_published_items,
     get_published_item_full,
     update_published_item,
     delete_published_item
 )
+
 from shared.content_renderer import render_published_content
 
-@st.dialog("👁 Preview Published Item", width="large")
-def open_preview_dialog(item_id):
-    item = get_published_item_full(item_id)
 
+# -----------------------------
+# Dialogs
+# -----------------------------
+@st.dialog("👁 Preview Published Item", width="large")
+def open_preview_dialog(item_id: int):
+    item = get_published_item_full(item_id)
     if not item:
         st.error("Item not found.")
         return
@@ -20,15 +26,18 @@ def open_preview_dialog(item_id):
 
     st.subheader(title)
     st.caption(f"{subject} • Grade {grade} • {ctype}")
-
     st.divider()
 
     render_published_content(content, content_type=ctype)
 
-@st.dialog("✏️ Edit Published Item")
-def open_edit_dialog(item_id):
-    item = get_published_item_full(item_id)
+    st.divider()
+    if st.button("Close", width="stretch"):
+        st.rerun()
 
+
+@st.dialog("✏️ Edit Published Item")
+def open_edit_dialog(item_id: int):
+    item = get_published_item_full(item_id)
     if not item:
         st.error("Item not found.")
         return
@@ -39,7 +48,7 @@ def open_edit_dialog(item_id):
         title = st.text_input("Title", title)
         subject = st.text_input("Subject", subject)
         grade = st.text_input("Grade", grade)
-        ctype = st.selectbox("Type", ["questions", "notes", "practice", "explanation"], index=0)
+        ctype = st.text_input("Type", ctype)  # keep flexible
         visible = st.checkbox("Visible", bool(visible))
 
         st.markdown("### Content")
@@ -50,22 +59,30 @@ def open_edit_dialog(item_id):
             st.toast("Saved", icon="✅")
             st.rerun()
 
-@st.dialog("🗑 Delete Published Item")
-def open_delete_dialog(item_id):
-    st.warning("This cannot be undone.")
 
-    if st.button("❌ Confirm Delete"):
+@st.dialog("🗑 Delete Published Item")
+def open_delete_dialog(item_id: int):
+    item = get_published_item_full(item_id)
+    if not item:
+        st.error("Item not found.")
+        return
+
+    _, title, subject, grade, ctype, content, created, updated, visible = item
+    st.warning(f"Delete **{title}**? This cannot be undone.")
+
+    if st.button("❌ Confirm Delete", width="stretch"):
         delete_published_item(item_id)
         st.toast("Deleted", icon="🗑️")
         st.rerun()
 
-# Render page
-def show_published_manager():
 
+# -----------------------------
+# Page
+# -----------------------------
+def show_published_manager():
     st.header("📦 Published Content Manager")
 
     rows = list_published_items()
-
     if not rows:
         st.info("No published items yet.")
         st.stop()
@@ -74,32 +91,41 @@ def show_published_manager():
         "id", "title", "subject", "grade", "type", "created", "updated", "visible"
     ])
 
-    df.insert(0, "Preview", False)
-    df.insert(1, "Edit", False)
-    df.insert(2, "Delete", False)
+    # ---- ACTION HANDLER ----
+    def handle_action(row_idx: int):
+        key = f"pub_action_{row_idx}"
+        choice = ss.get(key, "·")
 
-    # Display table
-    edited = st.data_editor(
-        df,
-        hide_index=True,
-        height=500,
-        column_config={
-            "Preview": st.column_config.CheckboxColumn("Preview"),
-            "Edit": st.column_config.CheckboxColumn("Edit"),
-            "Delete": st.column_config.CheckboxColumn("Delete"),
-            "id": st.column_config.NumberColumn("ID"),
-        }
-    )
+        item_id = int(df.iloc[row_idx]["id"])
 
-    # Handle actions
-    for i, row in edited.iterrows():
-        item_id = int(row["id"])
-
-        if row["Preview"]:
+        if choice == "👁":
             open_preview_dialog(item_id)
 
-        if row["Edit"]:
+        elif choice == "✏️":
             open_edit_dialog(item_id)
 
-        if row["Delete"]:
+        elif choice == "🗑️":
             open_delete_dialog(item_id)
+
+        # reset pill back to neutral so it doesn't re-trigger
+        ss[key] = "·"
+
+    st.markdown("""
+    <style>
+    div[data-testid="stButtonGroup"] button:first-child { display:none; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ---- LIST ----
+    with st.expander("📚 Published Items", expanded=True):
+        for i, row in df.iterrows():
+            label = f"{row['title']} — {row['subject']} • Grade {row['grade']} • {row['type']}"
+            st.pills(
+                label="Published item action",
+                label_visibility="collapsed",
+                options=["·", "👁", "✏️", "🗑️", label],
+                key=f"pub_action_{i}",
+                width="content",
+                on_change=handle_action,
+                args=(i,),
+            )

@@ -1,10 +1,17 @@
 # numerace.py
-import random
 import time
-import math
 import streamlit as st
 from streamlit import session_state as ss
 from streamlit_autorefresh import st_autorefresh
+from pathlib import Path
+import sys
+
+# Ensure project root is on sys.path so we can import from /shared
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from shared.numeracy_dsl import load_game, pick_question_def, build_question
 
 # ------------------------------------------------------------
 # Config (tune these later / per difficulty)
@@ -15,7 +22,8 @@ ROUND_SECONDS_DEFAULT = 90          # total time to finish 8 correct answers
 QUESTION_SECONDS_DEFAULT = 10        # time per question
 FEEDBACK_SECONDS_DEFAULT = 3.5      # paused feedback display time (excluded from round timer)
 
-AUTOREFRESH_MS = 400                # UI tick rate
+AUTOREFRESH_ANSWER_MS = 1000   # slow: avoids click-eating
+AUTOREFRESH_FEEDBACK_MS = 250  # fast: snappy auto-advance
 
 # ------------------------------------------------------------
 # Helpers: session-state init
@@ -63,11 +71,26 @@ def ss_init():
     ss.nr_incorrect_total = 0
     ss.nr_missed_total = 0
 
+    # DSL game config
+    ss.nr_game_path = str(PROJECT_ROOT / "shared" / "numeracy_game.json")
+    ss.nr_game = load_game(ss.nr_game_path)
+
+    # selection tracking within a round
+    ss.nr_q_history = []      # list of question IDs used recently
+    ss.nr_q_used_counts = {}  # qid -> count used this round
+
+    # pull defaults from JSON rules (still overridable by sliders if you want)
+    rules = ss.nr_game.get("rules", {})
+    ss.nr_segments = int(rules.get("segments_per_round", ss.nr_segments))
+    ss.nr_round_seconds = int(rules.get("round_seconds", ss.nr_round_seconds))
+    ss.nr_question_seconds = int(rules.get("question_seconds", ss.nr_question_seconds))
+    ss.nr_feedback_seconds = int(rules.get("feedback_seconds", ss.nr_feedback_seconds))
+
 
 def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
 
-def suppress_autorefresh(seconds: float = 0.35):
+def suppress_autorefresh(seconds: float = 0.5):
     ss.nr_no_refresh_until = time.time() + seconds
 
 def start_round():
@@ -81,7 +104,7 @@ def start_round():
 
     ss.nr_q_started_at = now
     ss.nr_q = make_question()
-    suppress_autorefresh(0.35)
+    suppress_autorefresh()
 
     ss.nr_last_choice = None
     ss.nr_feedback = None
@@ -90,7 +113,8 @@ def start_round():
     ss.nr_incorrect_in_round = 0
     ss.nr_missed_in_round = 0
 
-
+    ss.nr_q_history = []
+    ss.nr_q_used_counts = {}
 
 def reset_round():
     ss.nr_correct_in_round = 0
@@ -112,6 +136,9 @@ def reset_round():
     ss.nr_incorrect_in_round = 0
     ss.nr_missed_in_round = 0
 
+    ss.nr_q_history = []
+    ss.nr_q_used_counts = {}
+
 def start_feedback_pause():
     """Enter feedback state; exclude this time from the round timer."""
     now = time.time()
@@ -121,7 +148,6 @@ def start_feedback_pause():
 
     # start excluding from round timer
     ss.nr_round_pause_started_at = now
-
 
 def end_feedback_pause_and_advance():
     """Leave feedback state, add excluded time to accumulator, and advance to next question or end round."""
@@ -140,7 +166,7 @@ def end_feedback_pause_and_advance():
     ss.nr_state = "answering"
     ss.nr_q_started_at = now
     ss.nr_q = make_question()
-    suppress_autorefresh(0.35)
+    suppress_autorefresh()
 
     ss.nr_last_choice = None
     ss.nr_feedback = None
@@ -180,120 +206,21 @@ def question_time_left(now: float) -> float:
 # ------------------------------------------------------------
 # Question generation
 # ------------------------------------------------------------
-def eval_expr(expr: str) -> int:
-    # Safe enough for controlled generation
-    return int(eval(expr))
-
-
-def gen_which_sum_larger():
-    # Example: -23 + 45  OR  79 - 61
-    a = random.randint(-60, 60)
-    b = random.randint(-60, 60)
-    c = random.randint(-60, 60)
-    d = random.randint(-60, 60)
-
-    # bias toward +/- operations
-    left = f"{a} + {b}"
-    right = f"{c} - {d}"
-
-    lv = eval_expr(left)
-    rv = eval_expr(right)
-
-    prompt = "Which sum is larger?"
-    choices = [
-        {"label": left, "value": lv},
-        {"label": right, "value": rv},
-    ]
-    correct_index = 0 if lv > rv else 1 if rv > lv else random.randint(0, 1)  # tie-break
-    explain = f"{left} = {lv} ; {right} = {rv}"
-    return prompt, choices, correct_index, explain
-
-
-def gen_which_product_smaller():
-    # Example: 11 * 8 OR 7 * 12
-    a = random.randint(2, 14)
-    b = random.randint(2, 14)
-    c = random.randint(2, 14)
-    d = random.randint(2, 14)
-
-    left = f"{a} * {b}"
-    right = f"{c} * {d}"
-
-    lv = eval_expr(left)
-    rv = eval_expr(right)
-
-    prompt = "Which product is smaller?"
-    choices = [
-        {"label": left, "value": lv},
-        {"label": right, "value": rv},
-    ]
-    correct_index = 0 if lv < rv else 1 if rv < lv else random.randint(0, 1)
-    explain = f"{left} = {lv} ; {right} = {rv}"
-    return prompt, choices, correct_index, explain
-
-
-def gen_fraction_to_decimal_equiv():
-    # Example: Which is equivalent of 3/8? 0.375 or 0.425
-    denom = random.choice([4, 5, 8, 10, 16, 20, 25, 40])
-    num = random.randint(1, denom - 1)
-
-    exact = num / denom
-    # create a distractor near exact but not equal
-    delta = random.choice([0.01, 0.02, 0.03, 0.05, 0.08])
-    distractor = exact + random.choice([-delta, delta])
-    distractor = max(0.0, min(1.0, distractor))
-
-    # format nicely
-    exact_s = f"{exact:.3f}".rstrip("0").rstrip(".")
-    dist_s = f"{distractor:.3f}".rstrip("0").rstrip(".")
-
-    prompt = f"Which is equivalent to the fraction {num}/{denom} ?"
-    # randomize which side is correct
-    if random.random() < 0.5:
-        labels = [exact_s, dist_s]
-        correct_index = 0
-    else:
-        labels = [dist_s, exact_s]
-        correct_index = 1
-
-    choices = [{"label": labels[0], "value": float(labels[0])},
-               {"label": labels[1], "value": float(labels[1])}]
-
-    explain = f"{num}/{denom} = {exact_s}"
-    return prompt, choices, correct_index, explain
-
-
-def gen_three_choice_variant():
-    # simple 3-choice example: "Which is closest to 1/3?"
-    exact = 1/3
-    opts = [exact, exact + 0.05, exact - 0.04]
-    random.shuffle(opts)
-
-    labels = [f"{x:.3f}".rstrip("0").rstrip(".") for x in opts]
-    correct_index = labels.index(f"{exact:.3f}".rstrip("0").rstrip("."))
-
-    prompt = "Which is closest to 1/3 ?"
-    choices = [{"label": labels[i], "value": float(labels[i])} for i in range(3)]
-    explain = f"1/3 ≈ {exact:.3f}".rstrip("0").rstrip(".")
-    return prompt, choices, correct_index, explain
-
-
 def make_question():
-    # Expand this list as you add types/difficulty scaling
-    generators = [
-        gen_which_sum_larger,
-        gen_which_product_smaller,
-        gen_fraction_to_decimal_equiv,
-        gen_three_choice_variant,
-    ]
-    prompt, choices, correct_index, explain = random.choice(generators)()
-    return {
-        "prompt": prompt,
-        "choices": choices,
-        "correct_index": correct_index,
-        "explain": explain,
-    }
+    qdef = pick_question_def(ss.nr_game, ss.nr_q_history, ss.nr_q_used_counts)
+    built = build_question(ss.nr_game, qdef)
 
+    # update tracking
+    ss.nr_q_history.append(built.qid)
+    ss.nr_q_used_counts[built.qid] = ss.nr_q_used_counts.get(built.qid, 0) + 1
+
+    return {
+        "prompt": built.prompt,
+        "choices": built.choices,               # [{"label":..., "value":...}, ...]
+        "correct_index": built.correct_index,
+        "explain": built.explain or "",
+        "qid": built.qid
+    }
 
 # ------------------------------------------------------------
 # Game logic
@@ -409,11 +336,20 @@ def numerace_app():
 
     # Only tick/refresh while actively playing
     if ss.nr_state in ("answering", "feedback"):
-        # Do not refresh during the brief stabilization window after a new question appears
+
+        # Always schedule refresh (keeps timers/feedback moving)
+        if ss.nr_state == "answering":
+            st_autorefresh(interval=AUTOREFRESH_ANSWER_MS, key="nr_tick_answer")
+        else:
+            st_autorefresh(interval=AUTOREFRESH_FEEDBACK_MS, key="nr_tick_feedback")
+
+        # During the short suppression window, we do NOT run logic that can
+        # interfere with clicks / immediate transitions.
         if time.time() >= ss.nr_no_refresh_until:
-            st_autorefresh(interval=AUTOREFRESH_MS, key="nr_tick")
-        handle_timeout_if_needed(now)
-        tick_feedback(now)
+            if ss.nr_state == "answering":
+                handle_timeout_if_needed(now)
+            else:
+                tick_feedback(now)
 
     # ------------------------------------------------------------
     # Top header + styles
@@ -459,40 +395,34 @@ def numerace_app():
     # Header control button (Start / Next)
     with h3:
         if ss.nr_state == "idle":
-            if st.button("🏁 Start round", use_container_width=True):
+            if st.button("🏁 Start round", width="stretch"):
                 start_round()
                 st.rerun()
+
         elif ss.nr_state == "round_complete":
-            if st.button("➡️ Next round", use_container_width=True):
+            if st.button("➡️ Next round", width="stretch"):
                 ss.nr_round_id += 1
                 reset_round()
                 st.rerun()
+
         else:
-            st.write("")
+            # answering / feedback
+            if st.button("🛑 Cancel", width="stretch"):
+                ss.nr_state = "round_complete"
+                ss.nr_feedback = None
+                ss.nr_feedback_started_at = None
+                ss.nr_round_pause_started_at = None
+                st.rerun()
 
     st.divider()
 
     # ------------------------------------------------------------
     # Track row with Cancel on the left
     # ------------------------------------------------------------
-    track_left, track_mid, track_right = st.columns([1.2, 6, 1.2], vertical_alignment="center")
-
-    with track_left:
-        if ss.nr_state in ("answering", "feedback"):
-            if st.button("🛑 Cancel", use_container_width=True):
-                ss.nr_state = "round_complete"
-                ss.nr_feedback = None
-                ss.nr_feedback_started_at = None
-                ss.nr_round_pause_started_at = None
-                st.rerun()
-        else:
-            st.write("")
+    track_mid = st.columns([1], vertical_alignment="center")[0]
 
     with track_mid:
         render_linear_track(ss.nr_correct_in_round, ss.nr_segments)
-
-    with track_right:
-        st.write("")
 
     # ------------------------------------------------------------
     # Center question container
@@ -572,8 +502,8 @@ def numerace_app():
             disabled = (ss.nr_state != "answering")
             if st.button(
                 ch["label"],
-                key=f"nr_choice_{ss.nr_round_id}_{ss.nr_correct_in_round}_{i}",
-                use_container_width=True,
+                key=f"nr_choice_{ss.nr_round_id}_{q['qid']}_{i}",
+                width="stretch",
                 disabled=disabled
             ):
                 submit_answer(i)
