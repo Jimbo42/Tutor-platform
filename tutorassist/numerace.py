@@ -576,25 +576,71 @@ def numerace_app():
 
             under.append(st.empty())
 
-    # Per-column feedback (show calculations under ALL options; only correct is green)
+    # Per-column feedback (bigger + clearer)
     if ss.nr_state == "feedback" and ss.nr_feedback:
+        # Inject once per run (safe)
+        st.markdown(
+            """
+            <style>
+            .nr-fb {
+                margin-top: 10px;
+                padding: 12px 14px;
+                border-radius: 14px;
+                border: 1px solid rgba(15, 23, 42, 0.12);
+                background: rgba(255,255,255,0.55);
+                font-size: 18px;
+                line-height: 1.25;
+            }
+            .nr-fb small {
+                font-size: 13px;
+                opacity: 0.8;
+            }
+            .nr-fb .nr-fb-val {
+                font-size: 22px;
+                font-weight: 800;
+            }
+            .nr-fb-ok { border-color: rgba(34,197,94,0.45); background: rgba(34,197,94,0.10); }
+            .nr-fb-bad { border-color: rgba(239,68,68,0.45); background: rgba(239,68,68,0.08); }
+            .nr-fb-neu { border-color: rgba(148,163,184,0.35); background: rgba(148,163,184,0.10); }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
         correct_i = q["correct_index"]
         fb = ss.nr_feedback
 
         for i, ch in enumerate(q["choices"]):
-            calc_line = f"`{ch['label']}`  \n= **{ch['value']}**"
+            # show label and big value
+            label = ch["label"]
+            val = ch["value"]
 
             if i == correct_i:
-                under[i].markdown(f"✅ **Correct**  \n{calc_line}")
+                cls = "nr-fb nr-fb-ok"
+                head = "✅ Correct"
             elif ss.nr_last_choice == i:
-                under[i].markdown(f"❌ **Your choice**  \n{calc_line}")
+                cls = "nr-fb nr-fb-bad"
+                head = "❌ Your choice"
             else:
-                under[i].markdown(f"⬜  \n{calc_line}")
+                cls = "nr-fb nr-fb-neu"
+                head = "⬜"
+
+            under[i].markdown(
+                f"""
+                <div class="{cls}">
+                  <div><b>{head}</b></div>
+                  <small>{label}</small><br/>
+                  <span class="nr-fb-val">{val}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         remaining = max(0.0, ss.nr_feedback_seconds - (now - ss.nr_feedback_started_at))
-        st.caption(f"{fb.get('msg','')} • continuing in {remaining:0.1f}s…")
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='text-align:center; font-size:16px; margin-top:12px;'><b>{fb.get('msg', '')}</b> • continuing in {remaining:0.1f}s…</div>",
+            unsafe_allow_html=True,
+        )
 
     # Footer controls (optional)
     with st.expander("⚙️ NumeRace settings (temporary)", expanded=False):
