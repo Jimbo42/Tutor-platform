@@ -7,9 +7,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import streamlit as st
+from streamlit import session_state as ss
+
 from shared.published_db import init_published_db
 from shared.auth import verify_password
-#from shared.user_data import init_user_data_db
 
 def load_image_base64(path: Path) -> str:
     data = path.read_bytes()
@@ -55,25 +56,19 @@ st.markdown(
 )
 
 # ----------------------------
-# Init shared DBs
-# ----------------------------
-init_published_db()
-#init_user_data_db()
-
-# ----------------------------
 # Auth helpers
 # ----------------------------
 def logout():
-    st.session_state.authenticated = False
-    st.session_state.username = None
+    ss.authenticated = False
+    ss.username = None
 
 def require_login():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "username" not in st.session_state:
-        st.session_state.username = None
+    if "authenticated" not in ss:
+        ss.authenticated = False
+    if "username" not in ss:
+        ss.username = None
 
-    if st.session_state.authenticated:
+    if ss.authenticated:
         return
 
     st.title("🔐 TutorAssist Login")
@@ -96,8 +91,8 @@ def require_login():
     if login_clicked:
         stored = users.get(u)
         if stored and verify_password(pw, stored):
-            st.session_state.authenticated = True
-            st.session_state.username = u
+            ss.authenticated = True
+            ss.username = u
             st.toast(f"Welcome, {u}!", icon="✅")
             st.rerun()
         else:
@@ -115,7 +110,7 @@ require_login()
 # -------------------------------------------------
 with st.sidebar:
     if st.button("🚪 Logout"):
-        st.session_state.authenticated = False
+        ss.authenticated = False
         st.rerun()
 
 pages = {

@@ -356,6 +356,118 @@ def gen_vertex_form():
 
     return disp, target, final_answers, vertex
 
+def gen_perfect_square_trinomial_gcf():
+    """
+    Perfect square trinomial with optional GCF:
+        g*(j ± a)^2  -> expanded target
+    Final should be g*(j ± a)^2 (structure).
+    """
+    g = random.choice([1, 2, 3, 4, 5, 6, 8, 10, 12])
+    if g != 1 and random.random() < 0.35:
+        g = -g  # sometimes negative overall
+
+    a = random.randint(2, 12)
+    sign = random.choice([1, -1])  # +a or -a inside
+
+    inner = sp.Add(j, sp.Integer(sign * a), evaluate=False)  # (j + a) or (j - a)
+    factored = mul_noexpand(sp.Integer(g), sp.Pow(inner, 2, evaluate=False))
+    target = sp.expand(factored)
+    disp = pretty(target)
+
+    # Include the "flipped" inner sign variant that is equivalent only when g also flips? (square kills sign)
+    # For squares, (-(j+a))^2 is same as (j+a)^2, so we don't need extra factor-order variants.
+    final_answers = {canon_key(factored)}
+
+    return disp, target, final_answers
+
+
+def gen_diff_cubes_gcf():
+    """
+    Difference of cubes with optional GCF:
+        g*(A^3 - B^3) -> expanded target
+    Where A and B are monomials like (m*j) or (n*k) or constants.
+    Final: g*(A - B)*(A^2 + A*B + B^2)
+    """
+    g = random.choice([1, 2, 3, 4, 5, 6, 8, 10, 12])
+    if g != 1 and random.random() < 0.35:
+        g = -g
+
+    # Choose A as a*j or a*j (always includes a variable)
+    a = random.choice([1, 2, 3])
+    A = mul_noexpand(sp.Integer(a), j)
+
+    # Choose B as either constant b or b*k
+    if random.random() < 0.5:
+        b = random.choice([1, 2, 3, 4])
+        B = sp.Integer(b)
+    else:
+        b = random.choice([1, 2, 3])
+        B = mul_noexpand(sp.Integer(b), k)
+
+    expr = sp.Pow(A, 3, evaluate=False) - sp.Pow(B, 3, evaluate=False)
+    target = sp.expand(mul_noexpand(sp.Integer(g), expr))
+    disp = pretty(target)
+
+    # Factored form (unevaluated)
+    first = sp.Add(A, -B, evaluate=False)  # (A - B)
+    second = sp.Add(
+        sp.Pow(A, 2, evaluate=False),
+        mul_noexpand(A, B),
+        sp.Pow(B, 2, evaluate=False),
+        evaluate=False
+    )
+    factored = mul_noexpand(sp.Integer(g), first, second)
+
+    # Also accept the “reversed” linear factor form: (B - A) with second factor negated.
+    # (A-B)*S == (B-A)*(-S)
+    factored_alt = mul_noexpand(sp.Integer(g), sp.Add(B, -A, evaluate=False), mul_noexpand(-1, second))
+
+    final_answers = {
+        canon_key(factored),
+        canon_key(factored_alt),
+    }
+
+    return disp, target, final_answers
+
+
+def gen_sum_cubes_gcf():
+    """
+    Sum of cubes with optional GCF:
+        g*(A^3 + B^3) -> expanded target
+    Final: g*(A + B)*(A^2 - A*B + B^2)
+    """
+    g = random.choice([1, 2, 3, 4, 5, 6, 8, 10, 12])
+    if g != 1 and random.random() < 0.35:
+        g = -g
+
+    a = random.choice([1, 2, 3])
+    A = mul_noexpand(sp.Integer(a), j)
+
+    if random.random() < 0.5:
+        b = random.choice([1, 2, 3, 4])
+        B = sp.Integer(b)
+    else:
+        b = random.choice([1, 2, 3])
+        B = mul_noexpand(sp.Integer(b), k)
+
+    expr = sp.Pow(A, 3, evaluate=False) + sp.Pow(B, 3, evaluate=False)
+    target = sp.expand(mul_noexpand(sp.Integer(g), expr))
+    disp = pretty(target)
+
+    first = sp.Add(A, B, evaluate=False)  # (A + B)
+    second = sp.Add(
+        sp.Pow(A, 2, evaluate=False),
+        mul_noexpand(-1, mul_noexpand(A, B)),  # -A*B (keep structure)
+        sp.Pow(B, 2, evaluate=False),
+        evaluate=False
+    )
+    factored = mul_noexpand(sp.Integer(g), first, second)
+
+    final_answers = {canon_key(factored)}
+
+    return disp, target, final_answers
+
+
 GENERATORS = {
     1: ("Common Factor (j,k)", gen_common_factor, lambda q: "Find the greatest common factor of all terms."),
     2: ("Trinomial (a = 1)", gen_trinomial_a1, lambda q: "Look for two numbers that multiply to C and add to B."),
@@ -367,8 +479,13 @@ GENERATORS = {
         lambda q: "First factor out the GCF, then factor the trinomial."),
     8: ("Difference of Squares + GCF", gen_diff_squares_gcf,
         lambda q: "First factor out the GCF, then use a² − b²."),
+    9: ("Perfect Square Trinomial (±) with optional GCF", gen_perfect_square_trinomial_gcf,
+                  lambda q: "Factor out any GCF, then use (j ± a)² = j² ± 2aj + a²."),
+    10: ("Difference of Cubes with optional GCF", gen_diff_cubes_gcf,
+                  lambda q: "Factor out any GCF, then use A³ − B³ = (A − B)(A² + AB + B²)."),
+    11: ("Sum of Cubes with optional GCF", gen_sum_cubes_gcf,
+                  lambda q: "Factor out any GCF, then use A³ + B³ = (A + B)(A² − AB + B²).")
 }
-
 # ==============================
 # 💡 Hint System
 # ==============================
@@ -476,7 +593,6 @@ def build_hints_sum_squares(q):
 
     return hints
 
-
 def build_hints_vertex_form(q):
     expr = q["target_expr"]
 
@@ -506,6 +622,32 @@ def build_hints_vertex_form(q):
 
     return hints
 
+def build_hints_perfect_square_trinomial_gcf(q):
+    return [
+        "First: check for a common factor (GCF) across all terms and factor it out.",
+        "Perfect square pattern: (j ± a)² = j² ± 2aj + a².",
+        "Look at the constant term: it should be a² after removing any GCF.",
+        "Then the middle term should be ±2a.",
+    ]
+
+
+def build_hints_diff_cubes_gcf(q):
+    return [
+        "First: factor out any common factor (GCF) from all terms.",
+        "Difference of cubes: A³ − B³ = (A − B)(A² + AB + B²).",
+        "Identify cube roots A and B (including coefficients).",
+        "Then apply the formula carefully (note the + + in the second factor).",
+    ]
+
+
+def build_hints_sum_cubes_gcf(q):
+    return [
+        "First: factor out any common factor (GCF) from all terms.",
+        "Sum of cubes: A³ + B³ = (A + B)(A² − AB + B²).",
+        "Identify cube roots A and B (including coefficients).",
+        "Then apply the formula carefully (note the − in the middle of the second factor).",
+    ]
+
 HINT_BUILDERS = {
     1: build_hints_common_factor,
     2: build_hints_trinomial_a1,
@@ -515,6 +657,9 @@ HINT_BUILDERS = {
     6: build_hints_vertex_form,
     7: build_hints_trinomial_a1_gcf,
     8: build_hints_diff_squares_gcf,
+    9: build_hints_perfect_square_trinomial_gcf,
+    10: build_hints_diff_cubes_gcf,
+    11: build_hints_sum_cubes_gcf
 }
 
 def build_hints_for_question(q):
@@ -833,6 +978,9 @@ def factoring_practice():
             6: "Level 6 — Complete the Square (Vertex Form)",
             7: "Level 7 — Trinomial (a = 1) + GCF",
             8: "Level 8 — Difference of Squares + GCF",
+            9: "Level 9 — Perfect Square Trinomial (+GCF)",
+            10: "Level 10 — Difference of Cubes (+GCF)",
+            11: "Level 11 — Sum of Cubes (+GCF)",
         }
 
         if "selected_levels" not in ss:
@@ -923,29 +1071,45 @@ def factoring_practice():
     q.setdefault("flash_correct", False)
     q.setdefault("flash_final_latex", "")
 
-    if not q.get("available_hints"):
-        q["available_hints"] = build_hints_for_question(q)
-
     # ✅ If last submit marked as correct, show final briefly then advance
     if q.get("flash_correct"):
-        st.success("✅ Fully factored!")
-        if q.get("flash_final_latex"):
-            st.latex(r"\Large " + q["flash_final_latex"])
-        time.sleep(1.9)
+        # Clean "final display": original question + final only (no working/steps)
+        st.success("✅ Fully Factored")
 
+        # Show the original question
+        try:
+            st.latex(r"\Large " + sp.latex(q["target_expr"]))
+        except Exception:
+            # fallback if something odd slips through
+            st.markdown(f"**Original:** `{str(q['target_expr'])}`")
+
+        # Show final answer (what we accepted)
+        if q.get("flash_final_latex"):
+            st.latex(r"\Large = " + q["flash_final_latex"])
+
+        # Slightly longer pause so the student can see it
+        time.sleep(2.7)
+
+        # Clear flash state + messages
         q["flash_correct"] = False
         q["last_message"] = ""
+        q["steps"] = []  # optional: keep the next screen clean
+        q["user_answer"] = ""  # optional
 
+        # Advance
         if idx + 1 >= len(questions):
             ss.factoring["finished"] = True
         else:
             ss.factoring["current"] += 1
-            questions[ss.factoring["current"]].setdefault("last_message", "")
             questions[ss.factoring["current"]]["last_message"] = ""
 
         ss.fact_input_version += 1
+        ss.fact_live_input = ""
         st.rerun()
-        return
+
+    # Build hints lazily (normal path)
+    if not q.get("available_hints"):
+        q["available_hints"] = build_hints_for_question(q)
 
     left, right = st.columns([3, 1.8])
 

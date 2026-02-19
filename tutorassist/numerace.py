@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from shared.numeracy_dsl import load_game, pick_question_def, build_question
+from shared.google_sheets_db import append_numerace_round
 
 # ------------------------------------------------------------
 # Config (tune these later / per difficulty)
@@ -42,7 +43,7 @@ def ss_init():
     ss.nr_round_id = 1
     ss.nr_correct_in_round = 0
 
-    # NEW: start idle until user clicks "Start round"
+    # start idle until user clicks "Start round"
     ss.nr_state = "idle"   # idle | answering | feedback | round_complete
 
     # timers (not running yet)
@@ -86,6 +87,8 @@ def ss_init():
     ss.nr_question_seconds = int(rules.get("question_seconds", ss.nr_question_seconds))
     ss.nr_feedback_seconds = int(rules.get("feedback_seconds", ss.nr_feedback_seconds))
 
+    ss.nr_logged_round_id = None
+    ss.nr_resp_times = []
 
 def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
@@ -116,6 +119,9 @@ def start_round():
     ss.nr_q_history = []
     ss.nr_q_used_counts = {}
 
+    ss.nr_logged_round_id = None
+    ss.nr_resp_times = []
+
 def reset_round():
     ss.nr_correct_in_round = 0
 
@@ -139,6 +145,9 @@ def reset_round():
     ss.nr_q_history = []
     ss.nr_q_used_counts = {}
 
+    ss.nr_logged_round_id = None
+    ss.nr_resp_times = []
+
 def start_feedback_pause():
     """Enter feedback state; exclude this time from the round timer."""
     now = time.time()
@@ -161,6 +170,14 @@ def end_feedback_pause_and_advance():
     # if round complete, stop; else next question
     if ss.nr_correct_in_round >= ss.nr_segments:
         ss.nr_state = "round_complete"
+
+        # ✅ log on transition into round_complete (idempotent)
+        total_q = ss.nr_correct_in_round + ss.nr_incorrect_in_round + ss.nr_missed_in_round
+        try:
+            log_round_once(total_q)
+        except Exception as e:
+            st.warning(f"Could not save to Google Sheets: {e}")
+
         return
 
     ss.nr_state = "answering"
@@ -236,6 +253,14 @@ def handle_timeout_if_needed(now: float):
         ss.nr_feedback = None
         ss.nr_feedback_started_at = None
         ss.nr_round_pause_started_at = None
+
+        # ✅ log on transition into round_complete (idempotent)
+        total_q = ss.nr_correct_in_round + ss.nr_incorrect_in_round + ss.nr_missed_in_round
+        try:
+            log_round_once(total_q)
+        except Exception as e:
+            st.warning(f"Could not save to Google Sheets: {e}")
+
         return
 
     # Question timeout counts as a MISS (not incorrect), shows feedback, then advances
@@ -246,8 +271,11 @@ def handle_timeout_if_needed(now: float):
         ss.nr_missed_in_round += 1
         ss.nr_missed_total += 1
 
+        # track response time for a missed question (full time window)
+        ss.nr_resp_times.append(float(ss.nr_question_seconds))
+
         ss.nr_feedback = {
-            "kind": "miss",  # NEW: lets UI label it as missed
+            "kind": "miss",
             "is_correct": False,
             "msg": "⏱️ Missed (no answer)",
             "correct_label": ss.nr_q["choices"][ss.nr_q["correct_index"]]["label"],
@@ -262,6 +290,9 @@ def submit_answer(choice_index: int):
 
     ss.nr_attempts_total += 1
     ss.nr_last_choice = choice_index
+    # track response time for this question
+    if ss.nr_q_started_at is not None:
+        ss.nr_resp_times.append(time.time() - ss.nr_q_started_at)
 
     correct = (choice_index == ss.nr_q["correct_index"])
     if correct:
@@ -323,6 +354,40 @@ def render_linear_track(completed: int, total: int):
     html = "<div class='nr-track'>" + "".join([f"<div class='nr-seg {c}'></div>" for c in segs]) + "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
+def log_round_once(total_q: int):
+    """
+    Log the current round to Google Sheets exactly once per round_id.
+    Safe across Streamlit reruns.
+    """
+    # ✅ already logged this specific round
+    if ss.get("nr_logged_round_id") == ss.nr_round_id:
+        return
+
+    ss.nr_logged_round_id = ss.nr_round_id
+
+    quiz_id = f"nr_round_{ss.nr_round_id}"
+    username = ss.get("username", "unknown")
+    total_questions = ss.nr_correct_in_round + ss.nr_incorrect_in_round + ss.nr_missed_in_round
+    now = time.time()
+    round_time = float(round_time_elapsed_active(now))
+
+    # average_response_time: mean of per-question response times
+    if ss.nr_resp_times:
+        average_response_time = float(sum(ss.nr_resp_times) / len(ss.nr_resp_times))
+    else:
+        average_response_time = 0.0
+
+    append_numerace_round(
+        username=username,
+        total_questions=int(total_questions),
+        incorrect=int(ss.nr_incorrect_in_round),
+        missed=int(ss.nr_missed_in_round),
+        attempts_total=int(ss.nr_attempts_total),
+        round_time=round_time,
+        average_response_time=average_response_time,
+    )
+
+    # time.sleep(0.25)
 
 # ------------------------------------------------------------
 # UI
