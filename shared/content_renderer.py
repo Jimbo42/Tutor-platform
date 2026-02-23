@@ -98,7 +98,7 @@ def _render_gdrive_interactive(payload: dict, key_prefix: str = ""):
     # ---- STUDENT EXPERIENCE RENDER ----
     if isinstance(data, dict) and data.get("type") == "questions":
         st.divider()
-        st.subheader("Student Preview")
+#        render_interactive_questions_paged(data, key_prefix=f"{key_prefix}q_")
         render_interactive_questions(data)
     else:
         st.warning("Downloaded JSON is not a worksheet.")
@@ -109,110 +109,169 @@ def _render_gdrive_interactive(payload: dict, key_prefix: str = ""):
         st.json(payload)
 
 def render_interactive_questions(data):
+    """
+    Stable one-question-at-a-time renderer (no auto-advance, no double-click weirdness).
+    - All widget keys are scoped by worksheet + question index.
+    - Per-question answered state stored in a dict.
+    - MCQ starts with no selection unless already answered/selected by the user.
+    """
     st.subheader(data.get("title", "Practice Questions"))
 
-    if "answers_checked" not in st.session_state:
-        ss.answers_checked = False
-
     questions = data.get("questions", [])
+    if not isinstance(questions, list) or not questions:
+        st.warning("No questions found.")
+        return
 
-    # ----------------------------
-    # Render questions
-    # ----------------------------
-    for q in questions:
-        qid = q["id"]
-        qtype = q.get("qtype", "short")
+    # Worksheet scope
+    title_key = normalize_text(data.get("title", "worksheet"))[:30] or "worksheet"
+    idx_key = f"ws_{title_key}_idx"
+    score_key = f"ws_{title_key}_score"
+    answered_map_key = f"ws_{title_key}_answered_map"   # dict: {i: bool}
 
-        st.markdown(f"### {qid}. {q['prompt']}")
+    ss.setdefault(idx_key, 0)
+    ss.setdefault(score_key, 0)
+    ss.setdefault(answered_map_key, {})  # per-question answered map
 
-        # Student input
-        if qtype == "short":
-            user_ans = st.text_input(
-                "Your answer:",
-                key=f"q_{qid}"
-            )
+    # Clamp index
+    i = int(ss[idx_key])
+    i = max(0, min(i, len(questions) - 1))
+    ss[idx_key] = i
 
-        elif qtype == "mcq":
-            choices = q["choices"]
-            user_ans = st.radio(
+    q = questions[i] if isinstance(questions[i], dict) else {}
+    qid = q.get("id", i + 1)
+    qtype = (q.get("qtype") or ("mcq" if "choices" in q else "short")).strip().lower()
+    prompt = q.get("prompt") or q.get("question") or q.get("text") or f"Question {i+1}"
+
+    answered_map = ss[answered_map_key]
+    is_answered = bool(answered_map.get(i, False))
+
+    # Header row
+    h1, h2, h3 = st.columns([2, 1, 1], vertical_alignment="center")
+    with h1:
+        st.markdown(f"### Question {i+1} of {len(questions)} — {qid}")
+    with h2:
+        st.metric("Score", int(ss[score_key]))
+    with h3:
+        if st.button("↩ Reset", width="stretch", key=f"ws_{title_key}_reset_{i}"):
+            ss[idx_key] = 0
+            ss[score_key] = 0
+            ss[answered_map_key] = {}
+            return
+
+    st.markdown(translate_latex(str(prompt)), unsafe_allow_html=True)
+
+    # Input keys must be per-question
+    ans_key = f"ws_{title_key}_ans_{i}"     # stores selected index or text input
+
+    user_ans = None
+
+    if qtype == "mcq":
+        choices = q.get("choices", [])
+        if not isinstance(choices, list) or not choices:
+            st.warning("This MCQ has no choices.")
+        else:
+            # If user hasn't selected anything yet, show no selection (index=None).
+            # If there is already a value in session_state for this key, Streamlit will show it.
+            sel = st.radio(
                 "Choose one:",
-                choices,
-                key=f"q_{qid}",
-                index=None
+                options=list(range(len(choices))),
+                index=None,
+                format_func=lambda k: f"{chr(65+k)}. {choices[k]}",
+                key=ans_key,
+                disabled=is_answered,
             )
+            user_ans = sel
+    else:
+        user_ans = st.text_input("Your answer:", key=ans_key, disabled=is_answered)
 
-        # ----------------------------
-        # After checking: show result
-        # ----------------------------
-        if ss.answers_checked:
-            if qtype == "short":
+    # Actions (keys must include i)
+    a1, a2, a3 = st.columns([1, 1, 1])
+    with a1:
+        if st.button("✅ Submit", width="stretch", disabled=is_answered, key=f"ws_{title_key}_submit_{i}"):
+
+            # Guard: require selection for MCQ
+            if qtype == "mcq" and user_ans is None:
+                st.warning("Please choose an option first.")
+                return
+
+            # Scoring
+            is_correct = False
+            if qtype == "mcq":
+                correct_index = q.get("correct_index", q.get("answer_index"))
+                try:
+                    correct_index = int(correct_index)
+                except Exception:
+                    correct_index = None
+
+                if correct_index is not None:
+                    is_correct = int(user_ans) == correct_index
+            else:
+                is_correct = short_answer_is_correct(str(user_ans or ""), q)
+
+            if is_correct:
+                ss[score_key] = int(ss[score_key]) + 1
+
+            # Mark this question answered (locks input until reset)
+            answered_map = dict(ss[answered_map_key])
+            answered_map[i] = True
+            ss[answered_map_key] = answered_map
+            return
+
+    with a2:
+        if st.button("⟵ Prev", width="stretch", disabled=(i == 0), key=f"ws_{title_key}_prev_{i}"):
+            ss[idx_key] = max(0, i - 1)
+            return
+
+    with a3:
+        if st.button("Next ⟶", width="stretch", disabled=(i >= len(questions) - 1), key=f"ws_{title_key}_next_{i}"):
+            ss[idx_key] = min(len(questions) - 1, i + 1)
+            return
+
+    # Feedback only if answered
+    if bool(ss[answered_map_key].get(i, False)):
+        explanation = q.get("explanation") or q.get("explain") or ""
+
+        if qtype == "mcq":
+            choices = q.get("choices", [])
+            correct_index = q.get("correct_index", q.get("answer_index"))
+            try:
+                correct_index = int(correct_index)
+            except Exception:
+                correct_index = None
+
+            if correct_index is None or not choices:
+                st.info("No answer key available for this question.")
+            else:
+                correct_text = (
+                    f"{chr(65+correct_index)}. {choices[correct_index]}"
+                    if 0 <= correct_index < len(choices)
+                    else "(correct_index out of range)"
+                )
+
+                # user_ans is whatever is currently stored; if student navigated away/back it persists
+                current_sel = ss.get(ans_key, None)
+                if current_sel is not None and int(current_sel) == correct_index:
+                    st.success(f"✅ Correct — {correct_text}")
+                else:
+                    st.error(f"❌ Not quite. Correct answer: {correct_text}")
+
+        else:
+            current_txt = str(ss.get(ans_key, "") or "")
+            if short_answer_is_correct(current_txt, q):
+                st.success("✅ Correct")
+            else:
+                st.error("❌ Incorrect")
                 correct = q.get("answer", "")
+                if correct:
+                    st.markdown(f"**Correct answer:** {translate_latex(str(correct))}", unsafe_allow_html=True)
 
-                if short_answer_is_correct(user_ans, q):
-                    st.success("✅ Correct")
-                else:
-                    st.error("❌ Incorrect")
-                    st.markdown(f"**Correct answer:** {correct}")
+                keywords = q.get("keywords", [])
+                if keywords:
+                    st.info("Key ideas: " + ", ".join(str(k) for k in keywords))
 
-                    # Optional: show guidance if keywords exist
-                    if "keywords" in q:
-                        st.info("Key ideas: " + ", ".join(q["keywords"]))
-
-            elif qtype == "mcq":
-                correct_choice = q["choices"][q["correct_index"]]
-
-                if user_ans == correct_choice:
-                    st.success("✅ Correct")
-                else:
-                    st.error("❌ Incorrect")
-                    st.markdown(f"**Correct answer:** {correct_choice}")
-
-        st.divider()
-
-    # ----------------------------
-    # Check answers button
-    # ----------------------------
-    if st.button("✅ Check Answers"):
-        ss.answers_checked = True
-        st.rerun()
-
-    # ----------------------------
-    # Score summary
-    # ----------------------------
-    if ss.answers_checked:
-        score = 0
-        total = len(questions)
-
-        for q in questions:
-            qid = q["id"]
-            qtype = q.get("qtype", "short")
-            user_ans = ss.get(f"q_{qid}")
-
-            if qtype == "short":
-                if short_answer_is_correct(user_ans, q):
-                    score += 1
-
-            elif qtype == "mcq":
-                if user_ans is None:
-                    pass  # unanswered
-                else:
-                    correct_choice = q["choices"][q["correct_index"]]
-                    if user_ans == correct_choice:
-                        score += 1
-
-        st.success(f"🎯 **Score: {score} / {total}**")
-
-    # ----------------------------
-    # Try again
-    # ----------------------------
-    if ss.answers_checked:
-        if st.button("🔄 Try Again"):
-            ss.answers_checked = False
-            for q in questions:
-                k = f"q_{q['id']}"
-                if k in ss:
-                    del ss[k]
-            st.rerun()
+        if explanation:
+            st.markdown("**Explanation**")
+            st.markdown(translate_latex(str(explanation)), unsafe_allow_html=True)
 
 def normalize_text(s: str) -> str:
     s = s.lower()
