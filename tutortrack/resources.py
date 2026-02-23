@@ -2,17 +2,13 @@ import sqlite3
 import streamlit as st
 from streamlit import session_state as ss
 import pandas as pd
-import os
 import qrcode
-import json
 from pathlib import Path
-import shutil
 import re
 
 from shared.formulas import show_formulas
 from published_manager import show_published_manager
 from tutortrack.lessons import get_conn
-from shared.published_db import publish_item
 
 _DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 _DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
@@ -52,10 +48,6 @@ def gdrive_urls(file_id: str) -> dict:
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
 IMG_PATH = BASE_DIR / "resources" / "images"
-PDF_DIR = PARENT_DIR / "shared" / "pdf_files"
-PUBLISHED_PDF_DIR = BASE_DIR.parent / "shared" / "published_files"
-PDF_DIR.mkdir(parents=True, exist_ok=True)
-pdf_folder = str(PDF_DIR)
 
 def get_resource_list():
     conn_l = get_conn()
@@ -179,163 +171,6 @@ def edit_resource(rowNum):
     get_resource_list()
     st.rerun()
 
-@st.dialog("Rename PDF")
-def rename_pdf_dialog(old_name: str, pdf_folder: str):
-    st.write(f"Current file name:\n**{old_name}**")
-
-    new_name = st.text_input("New name", value=old_name, key="rename_input")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("Cancel"):
-            ss.pop("rename_target", None)
-            st.rerun()
-
-    with col2:
-        if st.button("Confirm Rename"):
-            old_path = os.path.join(pdf_folder, old_name)
-            new_path = os.path.join(pdf_folder, new_name)
-
-            if old_name != new_name and os.path.exists(old_path):
-                os.rename(old_path, new_path)
-
-            ss.pop("rename_target", None)
-            st.rerun()
-
-@st.dialog("📤 Publish PDF to TutorAssist (Google Drive)")
-def publish_pdf_dialog(filename: str):
-    st.markdown(
-        "1) Upload the PDF to Google Drive folder: **TutorAssist / PDFs**  \n"
-        "2) Set sharing to **Viewer / Anyone with the link**  \n"
-        "3) Paste the share link (or file id) below."
-    )
-    st.caption("Tip: test the link in an Incognito window to confirm students can view it.")
-
-    title = st.text_input("Title", value=Path(filename).stem)
-    subject = st.text_input("Subject", value="Notes")
-    grade = st.text_input("Grade", value="All")
-    link = st.text_input("Google Drive share link (or file id)")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Cancel", width="stretch"):
-            st.rerun()
-
-    with c2:
-        if st.button("✅ Publish", width="stretch"):
-            file_id = extract_gdrive_file_id(link)
-            if not file_id:
-                st.error("Could not extract a Google Drive file id from that link.")
-                return
-
-            urls = gdrive_urls(file_id)
-
-            payload = {
-                "provider": "gdrive",
-                "folder": "PDFs",
-                "file_id": file_id,
-                "filename": filename,
-                "preview_url": urls["preview_url"],
-                "view_url": urls["view_url"],
-            }
-
-            publish_item(
-                title=title.strip(),
-                subject=subject.strip(),
-                grade=grade.strip(),
-                content_type="pdf",
-                content=payload
-            )
-
-            st.toast("Published PDF to student library", icon="📤")
-            st.rerun()
-
-def resources_pdf_viewer():
-
-    st.markdown("""
-    <style>
-    main {
-    padding-top: 0rem !important;
-    margin-top: 0rem !important;
-    }
-    /* Reduce top padding of main app container */
-    div.block-container {
-        padding-top: 0.5rem !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.header("Saved PDF Resources")
-
-    os.makedirs(pdf_folder, exist_ok=True)
-
-    pdf_files = sorted(
-        f for f in os.listdir(pdf_folder)
-        if f.lower().endswith(".pdf")
-    )
-
-    if not pdf_files:
-        st.info("No PDF files found in saved_files folder.")
-        return
-
-    # ---- ACTION HANDLER ----
-    def handle_action(row):
-        key = f"pdf_action_{row}"
-        choice = ss[key]
-        filename = pdf_files[row]
-        full_path = os.path.join(pdf_folder, filename)
-
-        if choice == "👀":
-            ss["selected_pdf"] = filename
-
-        elif choice == "🗑️":
-            os.remove(full_path)
-            st.rerun()
-
-        elif choice == "✏️":
-            ss["rename_target"] = filename
-
-        elif choice == "📤":
-            publish_pdf_dialog(filename)
-            st.toast("Published to student library", icon="📤")
-
-        # reset selection back to neutral
-        ss[key] = "·"
-
-    st.markdown("""
-    <style>
-    div[data-testid="stButtonGroup"] button:first-child {
-        display:none;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # ---- FILE LIST (auto expand / collapse) ----
-    expanded = "selected_pdf" not in ss
-
-    with st.expander("📂 PDF Files", expanded=expanded):
-        for i, filename in enumerate(pdf_files):
-            st.pills(
-                label="PDF file action",
-                label_visibility="collapsed",
-                options=["·", "👀", "🗑️", "✏️", "📤", filename],
-                key=f"pdf_action_{i}",
-                width="content",
-                on_change=handle_action,
-                args=(i,),
-            )
-
-    if "selected_pdf" in ss:
-        filename = ss["selected_pdf"]
-        st.subheader(filename)
-        st.pdf(os.path.join(pdf_folder, filename))
-
-    # ---- RENAME ----
-    if "rename_target" in ss:
-        old = ss["rename_target"]
-        rename_pdf_dialog(old, pdf_folder)
-
 def generate_qr_code(text):
     file_path = IMG_PATH / "qr_code.png"
     img = qrcode.make(text)
@@ -384,7 +219,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
 if "ResourceMode" not in ss:
     ss.ResourceMode = "Resources"
 
@@ -392,8 +226,6 @@ if "ResourceMode" not in ss:
 with st.sidebar:
     if st.button("Online ☁️"):
         ss.ResourceMode = "Online"
-    if st.button("Documents 📄"):
-        ss.ResourceMode = "Documents"
     if st.button("Formulas 🧠"):
         ss.ResourceMode= "Formulas"
     if st.button("Published Manager "):
@@ -466,9 +298,6 @@ if ss.ResourceMode == "Online":
                  hide_index=True,
                  height=650,
                  width="stretch")
-
-if ss.ResourceMode == "Documents":
-    resources_pdf_viewer()
 
 if ss.ResourceMode == "Formulas":
     show_formulas()

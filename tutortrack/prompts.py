@@ -1,51 +1,22 @@
+import io
 import re
 import sqlite3
 from openai import Client
 import streamlit as st
 from streamlit import session_state as ss
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 import json
 from datetime import datetime
 from pathlib import Path
 
 from tutortrack.lessons import get_conn
-from shared.published_db import publish_item
+from shared.google_db import publish_item
 from shared.content_renderer import render_interactive_questions, translate_latex
-
-_DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
-_DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
-_DRIVE_OPEN_ID = re.compile(r"/open\?id=([a-zA-Z0-9_-]+)")
-
-def extract_gdrive_file_id(url_or_id: str) -> str | None:
-    if not url_or_id:
-        return None
-    s = url_or_id.strip()
-
-    m = _DRIVE_FILE_ID.search(s)
-    if m:
-        return m.group(1)
-
-    m = _DRIVE_UC_ID.search(s)
-    if m:
-        return m.group(1)
-
-    m = _DRIVE_OPEN_ID.search(s)
-    if m:
-        return m.group(1)
-
-    # allow raw id
-    if re.fullmatch(r"[a-zA-Z0-9_-]{20,}", s):
-        return s
-
-    return None
-
-def gdrive_urls(file_id: str) -> dict:
-    return {
-        "view_url": f"https://drive.google.com/file/d/{file_id}/view",
-        "preview_url": f"https://drive.google.com/file/d/{file_id}/preview",
-        "download_url": f"https://drive.google.com/uc?export=download&id={file_id}",
-    }
-
+from shared.google_db import (
+    upload_interactive_json,
+    upload_pdf_bytes,
+)
 
 # Tutor root
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +27,7 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 # Font path
 FONT_PATH = ROOT / "tutortrack" / "resources" / "fonts" / "DejaVuSans.ttf"
+FONT_BOLD_PATH = ROOT / "tutortrack" / "resources" / "fonts" / "DejaVuSans-Bold.ttf"
 
 DEFAULT_LLM_CONFIG = {
     "openai_model": "gpt-4o-mini",
@@ -239,39 +211,6 @@ _MATH_BLOCK_OR_INLINE = re.compile(r"(\$\$.*?\$\$|\$.*?\$)", re.DOTALL)
 _TEX_RUN = re.compile(
     r"(?:\\[A-Za-z]+(?:\{[^}]*\})*[A-Za-z0-9{}\[\]_^%:+\-*/().=,]*)+"
 )
-
-# def translate_latex(val: str) -> str:
-#     if "\\" not in val and "$" not in val:
-#         return val
-#
-#     s = val
-#
-#     # 1) Normalize \( \) and \[ \] into $ and $$ (Streamlit-friendly)
-#     s = re.sub(r"\\\((.*?)\\\)", r"$\1$", s, flags=re.DOTALL)
-#     s = re.sub(r"\\\[(.*?)\\\]", r"$$\1$$", s, flags=re.DOTALL)
-#
-#     # 2) Wrap bare TeX commands (e.g., \text{C}_2\text{H}_2\text{O}_4) in $...$
-#     #    but ONLY outside existing $...$ / $$...$$ regions.
-#     parts = _MATH_BLOCK_OR_INLINE.split(s)
-#
-#     def wrap_tex_runs(text: str) -> str:
-#         def repl(m: re.Match) -> str:
-#             expr = m.group(0)
-#
-#             # keep trailing punctuation outside the $...$
-#             m2 = re.match(r"^(.*?)([.,;:!?)]*)$", expr)
-#             core, punct = m2.group(1), m2.group(2)
-#
-#             return f"${core}$" + punct
-#
-#         return _TEX_RUN.sub(repl, text)
-#
-#     for i in range(len(parts)):
-#         # Even indices are outside math (because split keeps the delimiters)
-#         if i % 2 == 0:
-#             parts[i] = wrap_tex_runs(parts[i])
-#
-#     return "".join(parts)
 
 JINJA_VAR = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 
@@ -481,210 +420,541 @@ def template_ui_new():
     with c2:
         st.button("♻️ Clear Fields", on_click=clear_fields_for_template)
 
-@st.dialog("Save chat")
-def save_chat():
+def _chat_to_editable_text(keep_prompts: bool = False) -> str:
+    """
+    Build an editable plain-text version of the chat.
+    If keep_prompts=False, only include assistant messages.
+    """
+    lines = []
+    for m in ss.get("messages", []):
+        if keep_prompts:
+            role = "You" if m["role"] == "user" else "ChatGPT"
+            lines.append(f"{role}: {m['content']}".strip())
+        else:
+            if m["role"] == "assistant":
+                lines.append(m["content"].strip())
+    return "\n\n".join([x for x in lines if x])
 
-    file_name = st.text_input("Save as:")
+def make_sharp_pdf_bytes(
+    *,
+    title: str,
+    subject: str,
+    grade: str,
+    body: str,
+    font_size: int = 12,
+    line_spacing: str = "normal",  # "tight" | "normal"
+    page_numbers: bool = True,
+) -> bytes:
+    import re
+    from datetime import datetime
+    from fpdf import FPDF
 
-    if st.button("Submit"):
-        if not file_name:
-            st.warning("Please enter a file name.")
+    # ----------------------------
+    # Patterns
+    # ----------------------------
+    BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+    MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+    URL_RE = re.compile(r"(https?://\S+)")
+    BLOCK_MATH_RE = re.compile(r"^\s*\$\$(.*?)\$\$\s*$")
+
+    # Subscript map for digits
+    SUB_MAP = str.maketrans({
+        "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+        "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉"
+    })
+
+    # ----------------------------
+    # PDF class (footer)
+    # ----------------------------
+    class PDF(FPDF):
+        def footer(self):
+            if not page_numbers:
+                return
+            self.set_y(-12)
+            self.set_font("DejaVu", "", 9)
+            self.cell(0, 10, f"Page {self.page_no()}", align="C")
+
+    # ----------------------------
+    # Text helpers
+    # ----------------------------
+    def _normalize(s: str) -> str:
+        if s is None:
+            return ""
+        s = str(s).replace("\r\n", "\n").replace("\r", "\n")
+        s = re.sub(r"[\x00-\x08\x0b-\x1f]", "", s)  # strip control chars
+        s = s.replace("\u00A0", " ")               # NBSP -> space
+        return s
+
+    def _break_long_tokens(line: str, chunk: int = 90) -> str:
+        parts = []
+        for tok in re.split(r"(\s+)", line):
+            if tok.strip() and len(tok) > chunk and not tok.isspace():
+                parts.append(" ".join(tok[i:i + chunk] for i in range(0, len(tok), chunk)))
+            else:
+                parts.append(tok)
+        return "".join(parts)
+
+    def latex_to_pretty_text(s: str) -> str:
+        """Small LaTeX->text pass for common biology/chemistry patterns."""
+        s = (s or "").strip()
+
+        # strip $$...$$ if present
+        s = s.replace("$$", "").strip()
+
+        # \text{...} -> ...
+        s = re.sub(r"\\text\{([^}]*)\}", r"\1", s)
+
+        # arrows
+        s = s.replace("\\rightarrow", "→").replace("\\to", "→")
+
+        # subscripts _{digits} and _digits
+        s = re.sub(r"_\{(\d+)\}", lambda m: m.group(1).translate(SUB_MAP), s)
+        s = re.sub(r"_(\d+)", lambda m: m.group(1).translate(SUB_MAP), s)
+
+        # remove braces
+        s = s.replace("{", "").replace("}", "")
+
+        # normalize spacing
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    # ----------------------------
+    # Bold rendering helpers
+    # ----------------------------
+    def _parse_bold_runs(text: str):
+        """Return list of (style, chunk) where style is 'normal' or 'bold'."""
+        runs = []
+        i = 0
+        for m in BOLD_RE.finditer(text):
+            if m.start() > i:
+                runs.append(("normal", text[i:m.start()]))
+            runs.append(("bold", m.group(1)))
+            i = m.end()
+        if i < len(text):
+            runs.append(("normal", text[i:]))
+        return runs or [("normal", text)]
+
+    def _tokenize_runs(runs):
+        """Yield (style, token) preserving whitespace tokens."""
+        for style, chunk in runs:
+            for tok in re.split(r"(\s+)", chunk):
+                if tok == "":
+                    continue
+                yield style, tok
+
+    def _set_style(style: str):
+        pdf.set_font("DejaVu", "B" if style == "bold" else "", font_size)
+
+    def _tok_width(style: str, tok: str) -> float:
+        _set_style(style)
+        return pdf.get_string_width(tok)
+
+    def _write_bold_wrapped_line(line_text: str):
+        """
+        Write one logical line with **bold** support, wrapped.
+        Uses pdf.write so we can mix fonts on a single line.
+        """
+        runs = _parse_bold_runs(line_text)
+        tokens = list(_tokenize_runs(runs))
+        if not tokens:
+            pdf.ln(lh)
             return
 
-        # Ensure .pdf extension
-        if not file_name.lower().endswith(".pdf"):
-            file_name += ".pdf"
+        current = []
+        cur_w = 0.0
 
-        save_file = PDF_DIR / file_name
+        def flush():
+            nonlocal current, cur_w
+            pdf.set_x(pdf.l_margin)
+            for style, tok in current:
+                _set_style(style)
+                pdf.write(lh, tok)
+            pdf.ln(lh)
+            current = []
+            cur_w = 0.0
 
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
+        for style, tok in tokens:
+            w = _tok_width(style, tok)
 
-        pdf.add_font("DejaVu", "", str(FONT_PATH), uni=True)
-        pdf.set_font("DejaVu", "", 16)
+            if cur_w + w > max_w and cur_w > 0:
+                flush()
 
-        pdf.cell(200, 10, file_name, ln=True, align="C")
+            # hard split over-wide tokens
+            if w > max_w:
+                step = max(1, int(len(tok) * (max_w / w)))
+                for j in range(0, len(tok), step):
+                    piece = tok[j:j + step]
+                    pw = _tok_width(style, piece)
+                    if cur_w + pw > max_w and cur_w > 0:
+                        flush()
+                    current.append((style, piece))
+                    cur_w += pw
+                continue
 
-        # Add chat messages
-        pdf.set_font("DejaVu", "", 12)
+            current.append((style, tok))
+            cur_w += w
 
-        for message in ss.messages:
-            role = "You" if message["role"] == "user" else "ChatGPT"
-            pdf.multi_cell(0, 10, f"{role}: {message['content']}")
-            pdf.ln()
+        if current:
+            flush()
 
-        pdf.output(str(save_file))
+    # ----------------------------
+    # Clickable link writer
+    # ----------------------------
+    def write_markdown_links_line(text: str):
+        """
+        Writes one logical line.
+        Supports:
+          - Markdown links: [label](url) -> clickable label
+          - bare URLs -> clickable URL
+        """
+        pdf.set_x(pdf.l_margin)
 
-        st.toast("PDF saved", icon="📄")
-        st.rerun()
+        # Split into text/link segments first
+        segments = []
+        i = 0
+        for m in MD_LINK_RE.finditer(text):
+            if m.start() > i:
+                segments.append(("text", text[i:m.start()], None))
+            segments.append(("link", m.group(1), m.group(2)))
+            i = m.end()
+        if i < len(text):
+            segments.append(("text", text[i:], None))
 
-@st.dialog("📤 Publish to Student App")
-def publish_dialog():
+        # Expand text segments into text + bare URL segments
+        expanded = []
+        for kind, chunk, url in segments:
+            if kind == "link":
+                expanded.append((kind, chunk, url))
+            else:
+                last = 0
+                for u in URL_RE.finditer(chunk):
+                    if u.start() > last:
+                        expanded.append(("text", chunk[last:u.start()], None))
+                    expanded.append(("url", u.group(1), u.group(1)))
+                    last = u.end()
+                if last < len(chunk):
+                    expanded.append(("text", chunk[last:], None))
 
-    if "last_response" not in ss or not ss.last_response:
-        st.warning("No generated content to publish yet.")
-        if st.button("Close"):
-            st.rerun()
-        return
+        cur_w = 0.0
 
-    st.markdown("### Publish the latest output")
+        def flush_line():
+            nonlocal cur_w
+            pdf.ln(lh)
+            pdf.set_x(pdf.l_margin)
+            cur_w = 0.0
 
-    title = st.text_input("Title")
-    subject = st.text_input("Subject", "Math")
-    grade = st.text_input("Grade", "All")
+        for kind, chunk, url in expanded:
+            if not chunk:
+                continue
+
+            pdf.set_font("DejaVu", "", font_size)
+            w = pdf.get_string_width(chunk)
+
+            if cur_w + w > max_w and cur_w > 0:
+                flush_line()
+
+            if w > max_w:
+                # hard split
+                step = max(1, int(len(chunk) * (max_w / w)))
+                for j in range(0, len(chunk), step):
+                    piece = chunk[j:j + step]
+                    pdf.set_font("DejaVu", "", font_size)
+                    pw = pdf.get_string_width(piece)
+                    if cur_w + pw > max_w and cur_w > 0:
+                        flush_line()
+                    if kind in ("link", "url"):
+                        pdf.set_text_color(0, 0, 255)
+                        pdf.write(lh, piece, link=url)
+                        pdf.set_text_color(0, 0, 0)
+                    else:
+                        pdf.write(lh, piece)
+                    cur_w += pw
+                continue
+
+            if kind in ("link", "url"):
+                pdf.set_text_color(0, 0, 255)
+                pdf.write(lh, chunk, link=url)
+                pdf.set_text_color(0, 0, 0)
+            else:
+                pdf.write(lh, chunk)
+
+            cur_w += w
+
+        pdf.ln(lh)
+
+    # ----------------------------
+    # Normalize inputs
+    # ----------------------------
+    title = _normalize(title).strip()
+    subject = _normalize(subject).strip()
+    grade = _normalize(grade).strip()
+    body = _normalize(body)
+
+    # ----------------------------
+    # Build PDF
+    # ----------------------------
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(18, 16, 18)
+    pdf.add_page()
+
+    # Fonts (Unicode-safe)
+    pdf.add_font("DejaVu", "", str(FONT_PATH))
+    pdf.add_font("DejaVu", "B", str(FONT_BOLD_PATH))
+
+    # Title
+    pdf.set_font("DejaVu", "", 18)
+    pdf.cell(0, 10, title or "Untitled", new_x="LMARGIN", new_y="NEXT", align="C")
+
+    # Meta line
+    pdf.set_font("DejaVu", "", 11)
+    meta = "   •   ".join(
+        [x for x in [
+            f"Subject: {subject}" if subject else "",
+            f"Grade: {grade}" if grade else "",
+            datetime.now().strftime("%Y-%m-%d"),
+        ] if x]
+    )
+    pdf.cell(0, 7, meta, new_x="LMARGIN", new_y="NEXT", align="C")
+
+    # Divider
+    pdf.ln(2)
+    y = pdf.get_y()
+    pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
+    pdf.ln(6)
+
+    # Body settings
+    max_w = pdf.w - pdf.l_margin - pdf.r_margin
+    lh = 6 if line_spacing == "tight" else 7
+
+    # Render body line-by-line
+    for raw_line in body.split("\n"):
+        safe_line = _break_long_tokens(raw_line, chunk=90)
+
+        # (1) Convert $$...$$ single-line math blocks to readable text
+        m = BLOCK_MATH_RE.match(safe_line.strip())
+        if m:
+            pretty = latex_to_pretty_text(m.group(1))
+            pdf.set_font("DejaVu", "", font_size)
+            pdf.set_x(pdf.l_margin)
+            try:
+                pdf.multi_cell(max_w, lh, pretty, wrapmode="CHAR")
+            except TypeError:
+                pdf.multi_cell(max_w, lh, pretty)
+            continue
+
+        # (2) Links: markdown links + bare URLs (clickable)
+        if ("http://" in safe_line) or ("https://" in safe_line) or ("[" in safe_line and "](" in safe_line):
+            # If line ALSO contains **bold**, strip markers for now
+            # (we can combine bold+links next if you want)
+            safe_links = safe_line.replace("**", "")
+            write_markdown_links_line(safe_links)
+            continue
+
+        # (3) Bold: **bold** support
+        if "**" in safe_line:
+            try:
+                _write_bold_wrapped_line(safe_line)
+            except Exception:
+                # fallback plain, strip markers
+                plain = safe_line.replace("**", "")
+                pdf.set_font("DejaVu", "", font_size)
+                pdf.set_x(pdf.l_margin)
+                try:
+                    pdf.multi_cell(max_w, lh, plain, wrapmode="CHAR")
+                except TypeError:
+                    pdf.multi_cell(max_w, lh, plain)
+            continue
+
+        # (4) Plain text
+        pdf.set_font("DejaVu", "", font_size)
+        pdf.set_x(pdf.l_margin)
+        try:
+            pdf.multi_cell(max_w, lh, safe_line, wrapmode="CHAR")
+        except TypeError:
+            pdf.multi_cell(max_w, lh, safe_line)
+
+    out = pdf.output()  # bytes / bytearray in fpdf2
+    return bytes(out) if not isinstance(out, bytes) else out
+
+@st.dialog("Edit / Save", width="large")
+def edit_save_dialog():
+    st.markdown("### Save or publish")
+
+    # Detect the latest output type
+    last = ss.get("last_response", None)
+    is_interactive = ss.get("last_output_kind") == "interactive" and is_interactive_response(last)
+    is_notes = is_notes_response(last) or isinstance(last, str)
+
+    # -------- Metadata (shared)
+    c1, c2, c3 = st.columns([2, 2, 1.5])
+    with c1:
+        # If interactive JSON includes its own title, prefer it as default
+        default_title = "Study Notes"
+        if is_interactive and isinstance(last, dict) and isinstance(last.get("title"), str) and last["title"].strip():
+            default_title = last["title"].strip()
+        title = st.text_input("Title", value=default_title)
+
+    with c2:
+        subject = st.text_input("Subject", value="Math")
+    with c3:
+        grade = st.text_input("Grade", value="All")
+
+    make_public_flag = st.checkbox("Make file accessible to anyone with the link", value=True)
 
     st.divider()
 
-    # ---- Preview ----
-    with st.expander("🔍 Preview", expanded=True):
-        if is_interactive_response(ss.last_response):
-            st.caption("Detected: **Interactive (JSON)**")
-            st.json(ss.last_response)
-        else:
-            st.caption("Detected: **Notes (text)**")
-            st.markdown(translate_latex(str(ss.last_response)))
+    # ============================
+    # ✅ Interactive publish mode
+    # ============================
+    if is_interactive:
+        st.caption("Detected: **Interactive (JSON)** — this will publish to the Interactives folder.")
 
-    st.divider()
+        # Optional: show a small summary (no markdown preview)
+        if isinstance(last, dict):
+            qn = len(last.get("questions", [])) if isinstance(last.get("questions"), list) else None
+            if qn is not None:
+                st.info(f"Questions detected: {qn}")
 
-    # ---- Publishing paths ----
-    if is_interactive_response(ss.last_response):
-        st.subheader("Interactive publishing (Google Drive → TutorAssist / Interactives)")
-        st.caption("Step 1: Download the JSON. Step 2: Upload to Drive folder TutorAssist/Interactives. Step 3: Paste the share link.")
+        b1, b2 = st.columns([1, 1])
 
-        json_bytes = json.dumps(ss.last_response, ensure_ascii=False, indent=2).encode("utf-8")
-        default_filename = re.sub(r"[^A-Za-z0-9_-]+", "_", title.strip() or "interactive")[:80] + ".json"
+        with b1:
+            # Download JSON locally (handy for debugging)
+            if st.button("💾 Save Local (Download JSON)", use_container_width=True):
+                if not title.strip():
+                    st.error("Title is required.")
+                    return
+                st.download_button(
+                    "⬇️ Download now",
+                    data=json.dumps(last, ensure_ascii=False, indent=2).encode("utf-8"),
+                    file_name=f"{title.strip()}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
 
-        st.download_button(
-            "⬇️ Download JSON",
-            data=json_bytes,
-            file_name=default_filename,
-            mime="application/json",
-            width="stretch"
-        )
-
-        link = st.text_input("Google Drive share link (or file id)")
-        c1, c2 = st.columns(2)
-
-        with c1:
-            if st.button("Cancel", width="stretch"):
-                st.rerun()
-
-        with c2:
-            if st.button("📤 Publish Interactive", width="stretch"):
+        with b2:
+            if st.button("📤 Publish Interactive to Student", use_container_width=True):
                 if not title.strip():
                     st.error("Title is required.")
                     return
 
-                file_id = extract_gdrive_file_id(link)
-                if not file_id:
-                    st.error("Could not extract a Google Drive file id from that link.")
-                    return
+                # Upload JSON to Drive (Interactives folder)
+                payload = upload_interactive_json(
+                    obj=last,
+                    title=title.strip(),
+                    make_public=make_public_flag,
+                )
 
-                urls = gdrive_urls(file_id)
-
-                payload = {
-                    "provider": "gdrive",
-                    "folder": "Interactives",
-                    "file_id": file_id,
-                    "filename": default_filename,
-                    "view_url": urls["view_url"],
-                    "download_url": urls["download_url"],
-                }
-
+                # Add row to PublishedItems DB
                 publish_item(
                     title=title.strip(),
                     subject=subject.strip(),
                     grade=grade.strip(),
                     content_type="interactive",
-                    content=payload
+                    content=payload,
                 )
 
-                st.toast("Published interactive to student library", icon="📤")
+                st.success("Published Interactive to Student Library ✅")
                 st.rerun()
 
-    else:
-        st.subheader("Notes publishing (PDF → Google Drive → TutorAssist / PDFs)")
-        st.caption("Step 1: Generate/download the PDF. Step 2: Upload to Drive folder TutorAssist/PDFs. Step 3: Paste the share link.")
+        return  # ✅ stop here for interactive mode
 
-        # Build a PDF in memory or to disk; simplest is disk using your existing FPDF approach
-        default_pdf_name = re.sub(r"[^A-Za-z0-9_-]+", "_", title.strip() or "notes")[:80] + ".pdf"
+    # ============================
+    # 📝 Notes/PDF mode (existing)
+    # ============================
+    st.caption("Detected: **Notes (text)** — this will save/publish a PDF.")
 
-        if st.button("🧾 Generate PDF (local)", width="stretch"):
+    # -------- Formatting controls
+    f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.2, 1.4])
+    with f1:
+        keep_prompts = st.checkbox("Include prompts", value=False)
+    with f2:
+        font_size = st.selectbox("Font size", [11, 12, 13], index=1)
+    with f3:
+        line_spacing = st.selectbox("Line spacing", ["Tight", "Normal"], index=1)
+    with f4:
+        page_numbers = st.checkbox("Page numbers", value=True)
+
+    # Build default text to edit
+    default_text = _chat_to_editable_text(keep_prompts=keep_prompts)
+
+    # -------- Split view: editor + preview
+    left, right = st.columns([1.15, 1], vertical_alignment="top")
+
+    with left:
+        edited = st.text_area("Content", value=default_text, height=420)
+
+    with right:
+        st.markdown("**Preview (Markdown-style)**")
+        st.markdown(
+            f"#### {title.strip() or 'Untitled'}\n"
+            f"*Subject:* {subject.strip() or '-'}  \n"
+            f"*Grade:* {grade.strip() or '-'}\n\n"
+            f"---\n\n"
+            f"{edited[:4000] if edited else ''}"
+        )
+        if edited and len(edited) > 4000:
+            st.caption("Preview truncated… PDF will include full text.")
+
+    st.divider()
+
+    # ---- Save / Publish PDF
+    b1, b2 = st.columns([1, 1])
+
+    with b1:
+        if st.button("💾 Save Local (Download PDF)", use_container_width=True):
             if not title.strip():
-                st.error("Title is required before generating a PDF.")
-            else:
-                save_file = PDF_DIR / default_pdf_name
+                st.error("Title is required.")
+                return
+            pdf_bytes = make_sharp_pdf_bytes(
+                title=title.strip(),
+                subject=subject.strip(),
+                grade=grade.strip(),
+                body=edited,
+                font_size=int(font_size),
+                line_spacing=("tight" if line_spacing == "Tight" else "normal"),
+                page_numbers=bool(page_numbers),
+            )
+            st.download_button(
+                "⬇️ Download now",
+                data=pdf_bytes,
+                file_name=f"{title.strip()}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
-                pdf = FPDF()
-                pdf.set_auto_page_break(auto=True, margin=15)
-                pdf.add_page()
+    with b2:
+        if st.button("📤 Publish PDF to Student", use_container_width=True):
+            if not title.strip():
+                st.error("Title is required.")
+                return
 
-                pdf.add_font("DejaVu", "", str(FONT_PATH), uni=True)
-                pdf.set_font("DejaVu", "", 16)
-                pdf.cell(200, 10, title.strip(), ln=True, align="C")
-                pdf.ln()
+            pdf_bytes = make_sharp_pdf_bytes(
+                title=title.strip(),
+                subject=subject.strip(),
+                grade=grade.strip(),
+                body=edited,
+                font_size=int(font_size),
+                line_spacing=("tight" if line_spacing == "Tight" else "normal"),
+                page_numbers=bool(page_numbers),
+            )
 
-                pdf.set_font("DejaVu", "", 12)
-                pdf.multi_cell(0, 8, str(ss.last_response))
+            payload = upload_pdf_bytes(
+                pdf_bytes=pdf_bytes,
+                title=title.strip(),
+                make_public=make_public_flag,
+            )
 
-                pdf.output(str(save_file))
-                ss.generated_pdf_path = str(save_file)
-                st.toast("PDF generated", icon="📄")
-                st.rerun()
+            publish_item(
+                title=title.strip(),
+                subject=subject.strip(),
+                grade=grade.strip(),
+                content_type="pdf",
+                content=payload,
+            )
 
-        if ss.get("generated_pdf_path"):
-            p = Path(ss.generated_pdf_path)
-            if p.exists():
-                st.download_button(
-                    "⬇️ Download PDF",
-                    data=p.read_bytes(),
-                    file_name=p.name,
-                    mime="application/pdf",
-                    width="stretch"
-                )
-
-        link = st.text_input("Google Drive share link (or file id)", key="pdf_drive_link")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Cancel", width="stretch"):
-                ss.pop("generated_pdf_path", None)
-                st.rerun()
-
-        with c2:
-            if st.button("📤 Publish PDF", width="stretch"):
-                if not title.strip():
-                    st.error("Title is required.")
-                    return
-
-                file_id = extract_gdrive_file_id(link)
-                if not file_id:
-                    st.error("Could not extract a Google Drive file id from that link.")
-                    return
-
-                urls = gdrive_urls(file_id)
-
-                payload = {
-                    "provider": "gdrive",
-                    "folder": "PDFs",
-                    "file_id": file_id,
-                    "filename": default_pdf_name,
-                    "preview_url": urls["preview_url"],
-                    "view_url": urls["view_url"],
-                }
-
-                publish_item(
-                    title=title.strip(),
-                    subject=subject.strip(),
-                    grade=grade.strip(),
-                    content_type="pdf",
-                    content=payload
-                )
-
-                ss.pop("generated_pdf_path", None)
-                st.toast("Published PDF to student library", icon="📤")
-                st.rerun()
+            st.success("Published PDF to Student Library ✅")
+            st.rerun()
 
 def render_latest_preview():
     if not ss.get("last_response"):
@@ -767,24 +1037,25 @@ if "template_model" not in ss:
     ss.template_model = None
 if "last_response" not in ss:
     ss.last_response = None
+if "last_json_parsed" not in ss:
+    ss.last_json_parsed = None
+if "last_output_kind" not in ss:
+    ss.last_output_kind = "unknown"
 
 with st.sidebar:
 
     st.subheader("🤖 Chat Engine")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("💾", help="Save Chat"):
-            save_chat()  # 👈 THIS OPENS THE DIALOG
+        if st.button("✏️ Edit/Save", use_container_width=True):
+            edit_save_dialog()
 
     with col2:
-        if st.button("📤", help="Publish to Student App"):
-            publish_dialog()
-
-    with col3:
-        if st.button("📖", help="New Chat"):
+        if st.button("🆕 New Chat", use_container_width=True):
             ss.messages = []
+            ss.last_response = None
             st.rerun()
 
     st.divider()
@@ -917,40 +1188,65 @@ if ss.pending_prompt:
 
     ss.messages.append({"role": "assistant", "content": response})
 
+    # ---- Decide whether we should attempt JSON parsing ----
+    # Prefer template_system when present, but also allow "response looks like JSON" fallback
     expects_json = template_expects_json(ss.template_system)
 
-    # Default: treat as normal text
-    ss.last_response = response
 
-    if expects_json:
-        json_ok = True
+    def looks_like_json(s: str) -> bool:
+        s = (s or "").lstrip()
+        return s.startswith("{") or s.startswith("[")
+
+
+    should_try_json = expects_json or looks_like_json(response)
+
+    # Default: store raw response as notes
+    ss.last_response = response
+    ss.last_output_kind = "notes"
+
+    if should_try_json:
+        parsed = None
+        parsed_ok = False
+        schema_ok = False
 
         # ---------- TRY PARSE ----------
         try:
             parsed = json.loads(response)
-        except Exception as e:
+            parsed_ok = isinstance(parsed, (dict, list))
+        except Exception:
             st.error("❌ Model did not return valid JSON.")
             st.code(response)
-            ss.last_response = None
-            json_ok = False
 
-        # ---------- TRY SCHEMA ----------
-        if json_ok:
+        # Always keep the parsed object if we got one (even if schema fails)
+        if parsed_ok:
+            ss.last_json_parsed = parsed
+
+            # ---------- TRY SCHEMA (only if it is the worksheet type) ----------
             try:
                 if isinstance(parsed, dict) and parsed.get("type") == "questions":
                     validate_questions_schema(parsed)
+                    schema_ok = True
+                else:
+                    # Non-worksheet JSON is still "interactive-ish" for publishing
+                    schema_ok = True
             except Exception as e:
                 st.error(f"❌ JSON schema invalid: {e}")
                 st.json(parsed)
-                ss.last_response = None
-                json_ok = False
+                schema_ok = False
 
-        # ---------- SUCCESS ----------
-        if json_ok:
-            ss.last_response = parsed
-            st.success("✅ Valid worksheet JSON generated.")
+            # If parse succeeded, treat output as interactive for Edit/Save
+            ss.last_output_kind = "interactive"
+            ss.last_response = parsed  # so your existing preview/edit logic can use it
+
+            if schema_ok:
+                st.success("✅ Valid worksheet JSON generated.")
+            else:
+                st.warning("⚠️ JSON parsed, but schema failed. You can still publish or download and fix it.")
 
             render_latest_preview()
+        else:
+            # Parse failed; keep as notes (raw text)
+            ss.last_output_kind = "notes"
 
     # Clear template overrides
     ss.template_system = None

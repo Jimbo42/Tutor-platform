@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from shared.numeracy_dsl import load_game, pick_question_def, build_question
-from shared.google_sheets_db import append_numerace_round
+from shared.google_db import append_numerace_round
 
 # ------------------------------------------------------------
 # Config (tune these later / per difficulty)

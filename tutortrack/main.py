@@ -7,8 +7,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import streamlit as st
-from shared.published_db import init_published_db
-
 
 def load_image_base64(path: Path) -> str:
     data = path.read_bytes()
@@ -69,8 +67,6 @@ pages = {
         st.Page("configuration.py", title="Configuration"),
     ],
 }
-
-init_published_db()
 
 pg = st.navigation(pages)
 pg.run()

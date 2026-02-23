@@ -9,7 +9,6 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 from streamlit import session_state as ss
 
-from shared.published_db import init_published_db
 from shared.auth import verify_password
 
 def load_image_base64(path: Path) -> str:
@@ -122,18 +121,15 @@ pages = {
         st.Page("math_numeracy.py", title="NumerAce"),
     ],
     "Library": [
-        st.Page("practice.py", title="Practice Questions"),
+        st.Page("library.py", title="Library"),
     ],
     "Resources": [
-        st.Page("notes.py", title="Notes"),
         st.Page("formula_a.py", title="Formula List"),
     ],
     "Tools": [
         st.Page("chemistry_a.py", title="Chemistry Calculator"),
     ],
 }
-
-init_published_db()
 
 pg = st.navigation(pages)
 pg.run()
