@@ -63,6 +63,12 @@ def show_practice_library():
         unsafe_allow_html=True,
     )
 
+    c1, c2 = st.columns([5, 1], vertical_alignment="center")
+    with c2:
+        if st.button("🔄 Refresh", width="stretch", key="practice_refresh"):
+            _load_published_interactives.clear()
+            st.rerun()
+
     rows = _load_published_interactives()
     if not rows:
         st.info("No published items yet.")
@@ -163,7 +169,9 @@ def show_practice_library():
         return
 
     published_id = label_map[choice]
-    st.query_params["item"] = str(published_id)
+    # Only write query param if it changed (prevents double-rerun / double-click)
+    if st.query_params.get("item") != str(published_id):
+        st.query_params["item"] = str(published_id)
 
     # ----------------------------
     # Load item row
@@ -198,7 +206,7 @@ def show_practice_library():
         return
 
     if isinstance(worksheet, dict) and worksheet.get("type") == "questions":
-        render_interactive_questions(worksheet)
+        render_interactive_questions(worksheet, ws_key=published_id)
     else:
         st.warning("Downloaded JSON is not a questions worksheet.")
         st.json(worksheet)

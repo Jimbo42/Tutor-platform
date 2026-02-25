@@ -33,6 +33,12 @@ def show_notes_library():
     st.markdown("## 📘 Notes & Documents")
     st.caption("Choose a PDF to read while you work on practice questions.")
 
+    c1, c2 = st.columns([5, 1], vertical_alignment="center")
+    with c2:
+        if st.button("🔄 Refresh", width="stretch", key="notes_refresh"):
+            _load_published_pdfs.clear()
+            st.rerun()
+
     rows = _load_published_pdfs()
     if not rows:
         st.info("No published notes yet.")
