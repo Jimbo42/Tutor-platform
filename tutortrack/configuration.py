@@ -61,6 +61,18 @@ def get_chattemplate_by_id(tpl_id: int):
         "params": json.loads(row[7] or "{}"),
     }
 
+def get_chattemplate_id_by_title(title: str):
+    title = (title or "").strip()
+    if not title:
+        return None
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM ChatTemplates WHERE title = ? LIMIT 1", (title,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
 def upsert_chattemplate(tpl: dict):
     required = ["title", "model", "system_prompt", "user_prompt", "fields", "params"]
     for k in required:
@@ -164,12 +176,15 @@ def import_chattemplate_from_json_file(uploaded_file):
         "params": tpl.get("params") or {},
     }
 
-    # Validate JSON blocks
     if not isinstance(tpl_obj["fields"], list):
         raise ValueError("fields must be a JSON array")
-
     if not isinstance(tpl_obj["params"], dict):
         raise ValueError("params must be a JSON object")
+
+    # ✅ If a template with this title exists, convert this import into an UPDATE
+    existing_id = get_chattemplate_id_by_title(tpl_obj["title"])
+    if existing_id:
+        tpl_obj["id"] = existing_id
 
     upsert_chattemplate(tpl_obj)
 

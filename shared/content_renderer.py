@@ -98,8 +98,7 @@ def _render_gdrive_interactive(payload: dict, key_prefix: str = ""):
     # ---- STUDENT EXPERIENCE RENDER ----
     if isinstance(data, dict) and data.get("type") == "questions":
         st.divider()
-#        render_interactive_questions_paged(data, key_prefix=f"{key_prefix}q_")
-        render_interactive_questions(data)
+        render_questions_worksheet(data, ws_key=key_prefix)
     else:
         st.warning("Downloaded JSON is not a worksheet.")
         st.json(data)
@@ -439,6 +438,261 @@ def render_interactive_questions(data, *, ws_key: str = ""):
                 ss[state_key] = state
                 st.rerun()
 
+def render_matching_exercise(data: dict, *, ws_key: str = ""):
+    """
+    Matching exercise (aligned rows) + UI polish:
+    - row-aligned [input | term] so boxes line up with terms
+    - smaller input height via CSS
+    - extra spacing between definition rows
+    - disables browser autocomplete/history dropdowns (SCOPED to these matching inputs only)
+
+    Note: Streamlit does not provide autocomplete="off" on st.text_input; this uses a scoped DOM patch.
+    """
+    import re
+    import streamlit as st
+    from streamlit import session_state as ss
+    import streamlit.components.v1 as components
+
+    st.subheader(data.get("title", "Matching Exercise"))
+
+    instructions = data.get("instructions")
+    if instructions:
+        st.markdown(translate_latex(str(instructions)), unsafe_allow_html=True)
+
+    terms = data.get("terms", [])
+    defs = data.get("definitions", [])
+    answer_map = data.get("answer_map", {})
+    enforce_unique = bool(data.get("enforce_unique", True))
+
+    if not isinstance(terms, list) or not terms:
+        st.error("Matching worksheet missing 'terms' list.")
+        return
+    if not isinstance(defs, list) or not defs:
+        st.error("Matching worksheet missing 'definitions' list.")
+        return
+    if not isinstance(answer_map, dict) or not answer_map:
+        st.warning("No answer_map provided — will collect inputs but cannot score.")
+        answer_map = {}
+
+    # Normalize definitions into list of (letter, text)
+    norm_defs = []
+    for d in defs:
+        if isinstance(d, dict):
+            letter = str(d.get("letter", "")).strip().upper()
+            text = str(d.get("text", "")).strip()
+        else:
+            letter = ""
+            text = str(d).strip()
+        norm_defs.append((letter, text))
+
+    # Auto-letter if letters missing
+    if any(not L for L, _ in norm_defs):
+        norm_defs = [(chr(65 + i), t) for i, (_, t) in enumerate(norm_defs)]
+
+    letters = [L for L, _ in norm_defs]
+    max_letter = chr(65 + len(letters) - 1)
+    valid_set = set(letters)
+
+    # Scope key
+    title_key = normalize_text(data.get("title", "worksheet"))[:30] or "worksheet"
+    scope = (normalize_text(ws_key)[:40] if ws_key else title_key) or title_key
+    state_key = f"match_{scope}_state"
+
+    if state_key not in ss or not isinstance(ss.get(state_key), dict):
+        ss[state_key] = {"answers": {}, "submitted": False, "score": None}
+    state = ss[state_key]
+
+    # Initialize keys to blank
+    for i in range(len(terms)):
+        k = f"match_{scope}_t_{i}"
+        if k not in ss or ss[k] is None:
+            ss[k] = ""
+
+    # ---- CSS: smaller input boxes + nicer definition spacing ----
+    st.markdown(
+        f"""
+        <style>
+        /* Only shrink inputs that belong to this matching scope (aria-label prefix) */
+        input[aria-label^="match:{scope}:"] {{
+            height: 2.0rem !important;
+            padding: 0.10rem 0.40rem !important;
+            font-size: 1.0rem !important;
+            text-align: center !important;
+        }}
+
+        .match-def-item {{
+            margin-bottom: 0.75rem;
+            line-height: 1.35;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ---- JS: disable autocomplete/history dropdowns (SCOPED) ----
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          const prefix = "match:{scope}:";
+          const inputs = window.parent.document.querySelectorAll('input[type="text"][aria-label^="' + prefix + '"]');
+          inputs.forEach(inp => {{
+            inp.setAttribute('autocomplete', 'off');
+            inp.setAttribute('autocapitalize', 'characters');
+            inp.setAttribute('autocorrect', 'off');
+            inp.setAttribute('spellcheck', 'false');
+            // also hint to password managers / form history
+            inp.setAttribute('inputmode', 'text');
+          }});
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+    # Main layout: left (inputs+terms) | right (definitions)
+    c_left, c_defs = st.columns([2.2, 3.2], vertical_alignment="top")
+
+    with c_left:
+        st.markdown("### Terms")
+        h1, h2 = st.columns([0.7, 1.9], vertical_alignment="center")
+        with h1:
+            st.markdown("**Answer**")
+        with h2:
+            st.markdown("**Term**")
+
+    with c_defs:
+        st.markdown("### Definitions")
+        for L, text in norm_defs:
+            st.markdown(
+                f'<div class="match-def-item"><b>{L}.</b> {translate_latex(text)}</div>',
+                unsafe_allow_html=True,
+            )
+
+    # Collect entries & validate
+    entries = []
+    invalid_rows = set()
+
+    with c_left:
+        for i, term in enumerate(terms):
+            term_str = str(term).strip()
+            key = f"match_{scope}_t_{i}"
+
+            col_in, col_term = st.columns([0.7, 1.9], vertical_alignment="center")
+
+            with col_in:
+                # IMPORTANT: label sets aria-label; we scope CSS/JS off this
+                raw = st.text_input(
+                    label=f"match:{scope}:{i}",
+                    key=key,
+                    label_visibility="collapsed",
+                    max_chars=1,
+                    placeholder="",
+                    autocomplete="off",
+                )
+
+            cleaned = re.sub(r"[^A-Za-z]", "", str(raw or "")).upper()[:1]
+            if cleaned != (raw or ""):
+                ss[key] = cleaned
+                st.rerun()
+
+            with col_term:
+                st.markdown(translate_latex(term_str), unsafe_allow_html=True)
+
+            if cleaned and cleaned not in valid_set:
+                invalid_rows.add(i)
+
+            entries.append(cleaned)
+
+    # Duplicate detection
+    dup_letters = set()
+    if enforce_unique:
+        seen = {}
+        for i, L in enumerate(entries):
+            if not L:
+                continue
+            if L in seen:
+                dup_letters.add(L)
+            else:
+                seen[L] = i
+
+    if invalid_rows:
+        st.warning(f"Use only letters A–{max_letter}.")
+    if dup_letters:
+        st.warning(f"Each letter can be used only once (duplicates: {', '.join(sorted(dup_letters))}).")
+
+    all_filled = all(L for L in entries)
+    can_submit = all_filled and not invalid_rows and (not dup_letters)
+
+    st.divider()
+
+    def _clear_matching():
+        for i in range(len(terms)):
+            ss[f"match_{scope}_t_{i}"] = ""
+        ss[state_key] = {"answers": {}, "submitted": False, "score": None}
+
+    b1, b2, b3 = st.columns([1, 1, 1])
+
+    with b1:
+        if st.button("✅ Submit", width="stretch", disabled=not can_submit, key=f"match_{scope}_submit"):
+            answers = {str(terms[i]).strip(): entries[i] for i in range(len(terms))}
+            state["answers"] = answers
+            state["submitted"] = True
+
+            if answer_map:
+                correct = 0
+                for term_str, pick in answers.items():
+                    want = str(answer_map.get(term_str, "")).strip().upper()
+                    if want and pick == want:
+                        correct += 1
+                state["score"] = correct
+
+            ss[state_key] = state
+            st.rerun()
+    with b2:
+        st.button(
+            "🔄 Clear",
+            width="stretch",
+            key=f"match_{scope}_clear",
+            on_click=_clear_matching,
+        )
+    with b3:
+        if st.button("👀 Show key", width="stretch", key=f"match_{scope}_showkey"):
+            answers = {}
+            for i, term in enumerate(terms):
+                term_str = str(term).strip()
+                raw = str(ss.get(f"match_{scope}_t_{i}", "") or "").strip().upper()
+                answers[term_str] = re.sub(r"[^A-Za-z]", "", raw)[:1]
+            state["answers"] = answers
+            state["submitted"] = True
+            ss[state_key] = state
+            st.rerun()
+
+    if state.get("submitted"):
+        st.divider()
+
+        if state.get("score") is not None:
+            st.success(f"Score: {int(state['score'])} / {len(terms)}")
+
+        for term in terms:
+            term_str = str(term).strip()
+            got = str(state.get("answers", {}).get(term_str, "")).strip().upper()
+            want = str(answer_map.get(term_str, "")).strip().upper()
+
+            if got and got not in valid_set:
+                got = ""
+
+            if want:
+                if got == want:
+                    st.markdown(f"- ✅ **{translate_latex(term_str)}** → **{got}**", unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        f"- ❌ **{translate_latex(term_str)}** → you: `{got or '—'}` • correct: **{want}**",
+                        unsafe_allow_html=True
+                    )
+            else:
+                st.markdown(f"- **{translate_latex(term_str)}** → `{got or '—'}`", unsafe_allow_html=True)
+
 def normalize_text(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[^a-z0-9\s]", "", s)
@@ -477,6 +731,47 @@ def short_answer_is_correct(user_ans: str, q: dict) -> bool:
 
     return False
 
+def render_questions_worksheet(data: dict, *, ws_key: str = ""):
+    """
+    Routes worksheet rendering based on worksheet-level style or question-level qtype.
+
+    - If worksheet_style == "match": render matching UI (no questions[] required)
+    - Else: fall back to existing robust renderer (MCQ / short) which uses questions[]
+    """
+    if not isinstance(data, dict):
+        st.error("Worksheet is not a JSON object.")
+        return
+
+    if data.get("type") != "questions":
+        st.warning("Not a questions worksheet.")
+        st.json(data)
+        return
+
+    # ✅ FIRST: worksheet-level style (matching)
+    ws_style = (data.get("worksheet_style") or "").strip().lower()
+    if ws_style == "match":
+        render_matching_exercise(data, ws_key=ws_key)
+        return
+
+    # Standard worksheets below this line require questions[]
+    questions = data.get("questions", [])
+    if not isinstance(questions, list) or not questions:
+        st.warning("No questions found.")
+        return
+
+    # Infer from question-level qtypes (optional)
+    qtypes = set()
+    for q in questions:
+        if isinstance(q, dict):
+            qt = (q.get("qtype") or ("mcq" if "choices" in q else "short")).strip().lower()
+            qtypes.add(qt)
+
+    if "match" in qtypes:
+        render_matching_exercise(data, ws_key=ws_key)
+        return
+
+    render_interactive_questions(data, ws_key=ws_key)
+
 def render_published_content(content: str, content_type: str | None = None):
     """
     content: TEXT pulled from SQLite (either raw JSON worksheet, plain text, or a Drive payload JSON)
@@ -507,7 +802,6 @@ def render_published_content(content: str, content_type: str | None = None):
                 _render_gdrive_pdf(payload)
                 return
             if content_type == "interactive":
-#                _render_gdrive_interactive(payload)
                 _render_gdrive_interactive(payload, key_prefix=f"pm_{payload.get('file_id', '')}_")
 
                 return
@@ -524,7 +818,7 @@ def render_published_content(content: str, content_type: str | None = None):
 
             # If it's a worksheet JSON, render interactively
             if isinstance(data, dict) and data.get("type") == "questions":
-                render_interactive_questions(data)
+                render_questions_worksheet(data)
             else:
                 st.json(data)
 

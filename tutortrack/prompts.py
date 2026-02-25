@@ -12,7 +12,7 @@ from pathlib import Path
 
 from tutortrack.lessons import get_conn
 from shared.google_db import publish_item
-from shared.content_renderer import render_interactive_questions, translate_latex
+from shared.content_renderer import render_questions_worksheet, translate_latex
 from shared.google_db import (
     upload_interactive_json,
     upload_pdf_bytes,
@@ -288,6 +288,26 @@ def missing_vars(prompt: str, values: dict):
 def validate_questions_schema(obj: dict):
     """
     Validates the worksheet JSON schema.
+
+    Supports TWO worksheet shapes:
+
+    A) Standard question list (MCQ / short), used by render_interactive_questions():
+        {
+          "type": "questions",
+          "title": "...",
+          "questions": [ {qtype:"mcq"| "short", ...}, ... ]
+        }
+
+    B) Matching worksheet (worksheet-level), rendered by a separate matching UI:
+        {
+          "type": "questions",
+          "worksheet_style": "match",
+          "title": "...",
+          "terms": [...],
+          "definitions": [ {"letter":"A","text":"..."}, ... ]  OR  ["...", "..."],
+          "answer_map": { "<term>": "<LETTER>", ... }
+        }
+
     Raises ValueError if invalid.
     """
 
@@ -297,9 +317,68 @@ def validate_questions_schema(obj: dict):
     if obj.get("type") != "questions":
         raise ValueError("Root must contain: type='questions'")
 
-    if "title" not in obj or not isinstance(obj["title"], str):
+    if "title" not in obj or not isinstance(obj["title"], str) or not obj["title"].strip():
         raise ValueError("Missing or invalid 'title'")
 
+    ws_style = (obj.get("worksheet_style") or "").strip().lower()
+
+    # ==========================================================
+    # B) MATCHING WORKSHEET (worksheet-level, no questions[] needed)
+    # ==========================================================
+    if ws_style == "match":
+        terms = obj.get("terms", [])
+        defs = obj.get("definitions", [])
+        amap = obj.get("answer_map", {})
+
+        if not isinstance(terms, list) or len(terms) < 2:
+            raise ValueError("Matching worksheet must have 'terms' list with 2+ items")
+        if not all(isinstance(t, str) and t.strip() for t in terms):
+            raise ValueError("Matching worksheet: all terms must be non-empty strings")
+
+        if not isinstance(defs, list) or len(defs) != len(terms):
+            raise ValueError("Matching worksheet must have 'definitions' list the same length as terms")
+
+        # Allow defs as list[str] OR list[{"letter":...,"text":...}]
+        norm_defs = []
+        for j, d in enumerate(defs):
+            if isinstance(d, dict):
+                letter = str(d.get("letter", "")).strip().upper()
+                text = str(d.get("text", "")).strip()
+            else:
+                letter = ""  # will be auto-lettered conceptually
+                text = str(d).strip()
+
+            if not text:
+                raise ValueError(f"Matching worksheet: definition {j+1} is empty")
+
+            norm_defs.append((letter, text))
+
+        # If letters are provided, validate them
+        letters = [L for L, _ in norm_defs if L]
+        if letters:
+            if len(letters) != len(norm_defs):
+                raise ValueError("Matching worksheet: if any definition has a letter, all must have letters")
+            expected = [chr(65 + i) for i in range(len(norm_defs))]
+            if [L for L, _ in norm_defs] != expected:
+                raise ValueError("Matching worksheet: definition letters must be A, B, C... in order")
+
+        if not isinstance(amap, dict) or not amap:
+            raise ValueError("Matching worksheet must have non-empty 'answer_map' object")
+
+        # answer_map must map each term -> letter
+        max_letter = chr(65 + len(defs) - 1)
+        for t in terms:
+            if t not in amap:
+                raise ValueError(f"Matching worksheet: answer_map missing term '{t}'")
+            L = str(amap.get(t, "")).strip().upper()
+            if len(L) != 1 or not ("A" <= L <= max_letter):
+                raise ValueError(f"Matching worksheet: answer_map for '{t}' must be a letter A..{max_letter}")
+
+        return  # ✅ valid matching worksheet
+
+    # ==========================================================
+    # A) STANDARD WORKSHEET (questions[] list) - MCQ / short
+    # ==========================================================
     if "questions" not in obj or not isinstance(obj["questions"], list):
         raise ValueError("Missing or invalid 'questions' list")
 
@@ -310,22 +389,46 @@ def validate_questions_schema(obj: dict):
         if not isinstance(q, dict):
             raise ValueError(f"Question {i} is not an object")
 
-        if q.get("qtype") != "mcq":
-            raise ValueError(f"Question {i}: qtype must be 'mcq'")
+        qtype = (q.get("qtype") or ("mcq" if "choices" in q else "short")).strip().lower()
 
-        if not isinstance(q.get("prompt"), str):
+        if not isinstance(q.get("prompt"), str) or not q.get("prompt").strip():
             raise ValueError(f"Question {i}: missing or invalid prompt")
 
-        choices = q.get("choices")
-        if not isinstance(choices, list) or len(choices) != 4:
-            raise ValueError(f"Question {i}: must have exactly 4 choices")
+        # MCQ validation (strict, keep your current behavior)
+        if qtype == "mcq":
+            choices = q.get("choices")
+            if not isinstance(choices, list) or len(choices) != 4:
+                raise ValueError(f"Question {i}: must have exactly 4 choices")
 
-        if not all(isinstance(c, str) for c in choices):
-            raise ValueError(f"Question {i}: all choices must be strings")
+            if not all(isinstance(c, str) and c.strip() for c in choices):
+                raise ValueError(f"Question {i}: all choices must be non-empty strings")
 
-        ci = q.get("correct_index")
-        if not isinstance(ci, int) or not (0 <= ci <= 3):
-            raise ValueError(f"Question {i}: correct_index must be 0..3")
+            ci = q.get("correct_index", q.get("answer_index"))
+            if not isinstance(ci, int) or not (0 <= ci <= 3):
+                raise ValueError(f"Question {i}: correct_index must be 0..3")
+
+        # SHORT validation
+        elif qtype == "short":
+            answer = q.get("answer", "")
+            accept = q.get("accept", [])
+            keywords = q.get("keywords", [])
+
+            if answer in (None, "") and not accept and not keywords:
+                raise ValueError(
+                    f"Question {i}: short answer must include 'answer' or 'accept' or 'keywords'"
+                )
+
+            if accept and (not isinstance(accept, list) or not all(isinstance(a, str) for a in accept)):
+                raise ValueError(f"Question {i}: 'accept' must be a list of strings")
+
+            if keywords and (not isinstance(keywords, list) or not all(isinstance(k, str) for k in keywords)):
+                raise ValueError(f"Question {i}: 'keywords' must be a list of strings")
+
+            if answer not in (None, "") and not isinstance(answer, str):
+                raise ValueError(f"Question {i}: 'answer' must be a string")
+
+        else:
+            raise ValueError(f"Question {i}: unsupported qtype '{qtype}' (use 'mcq' or 'short')")
 
 def is_interactive_response(val) -> bool:
     return isinstance(val, (dict, list))
@@ -966,11 +1069,11 @@ def render_latest_preview():
 
         if is_interactive_response(ss.last_response):
             st.caption("Detected: **Interactive (JSON)**")
-            render_interactive_questions(ss.last_response)
-            # st.json(ss.last_response)
-        else:
-            st.caption("Detected: **Notes (text)**")
-            st.markdown(translate_latex(str(ss.last_response)))
+            if isinstance(ss.last_response, dict) and ss.last_response.get("type") == "questions":
+                render_questions_worksheet(ss.last_response)
+            else:
+                st.caption("Detected: **Notes (text)**")
+                st.json(ss.last_response)
 
     st.divider()
 

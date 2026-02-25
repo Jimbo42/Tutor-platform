@@ -6,7 +6,7 @@ from streamlit import session_state as ss
 from datetime import datetime
 
 from shared.google_db import get_sheet, get_drive_service
-
+from shared.content_renderer import render_questions_worksheet
 
 # -----------------------------
 # Sheet tabs (must exist)
@@ -379,7 +379,7 @@ def open_preview_dialog():
             st.info("No interactive payload loaded.")
         else:
             key_prefix = f"iprev_{item.get('published_id', '')}"
-            render_questions_interactive_preview(obj, key_prefix=key_prefix)
+            render_questions_worksheet(obj, ws_key=key_prefix)
 
         if item.get("drive_view_url"):
             st.link_button("🔗 Open in Drive", item["drive_view_url"], width="stretch")

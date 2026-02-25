@@ -3,7 +3,7 @@ import requests
 import streamlit as st
 from streamlit import session_state as ss
 
-from shared.content_renderer import render_interactive_questions, translate_latex
+from shared.content_renderer import render_questions_worksheet
 from shared.google_db import get_sheet
 
 
@@ -206,7 +206,7 @@ def show_practice_library():
         return
 
     if isinstance(worksheet, dict) and worksheet.get("type") == "questions":
-        render_interactive_questions(worksheet, ws_key=published_id)
+        render_questions_worksheet( worksheet, ws_key=published_id)
     else:
         st.warning("Downloaded JSON is not a questions worksheet.")
         st.json(worksheet)
