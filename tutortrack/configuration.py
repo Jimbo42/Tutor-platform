@@ -5,6 +5,7 @@ from streamlit import session_state as ss
 import json
 from pathlib import Path
 from datetime import datetime
+import hashlib
 
 from tutortrack.math_numeracy_admin import numeracy_admin_app
 
@@ -158,7 +159,7 @@ def export_chattemplate_to_json(tpl_id: int) -> str:
     return json.dumps(portable, ensure_ascii=False, indent=2)
 
 def import_chattemplate_from_json_file(uploaded_file):
-    tpl = json.loads(uploaded_file.read().decode("utf-8"))
+    tpl = json.loads(uploaded_file.getvalue().decode("utf-8"))
 
     # ---- Normalize & validate ----
     required = ["title", "model", "system_prompt", "user_prompt"]
@@ -591,18 +592,38 @@ if ss.configMode == "Templates":
     col1, col2 = st.columns(2)
 
     with col1:
-        up_json = st.file_uploader("Import from JSON", type=["json"])
-        if up_json:
-            import_chattemplate_from_json_file(up_json)
-            st.success("Imported template.")
-            st.rerun()
+        up_json = st.file_uploader("Import from JSON", type=["json"], key="tpl_json_uploader")
+        if up_json is not None:
+            raw = up_json.getvalue()  # IMPORTANT: stable bytes, doesn't get "consumed" like .read()
+            file_sig = f"{up_json.name}:{len(raw)}:{hashlib.md5(raw).hexdigest()}"
+
+            # import only once per unique upload
+            if ss.get("tpl_json_last_import") != file_sig:
+                try:
+                    # If your importer expects an UploadedFile-like object, keep using it:
+                    # (it can still call .read(); the rerun guard prevents looping)
+                    import_chattemplate_from_json_file(up_json)
+
+                    ss["tpl_json_last_import"] = file_sig
+                    st.success("Imported template.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
 
     with col2:
-        up_csv = st.file_uploader("Import from CSV", type=["csv"])
-        if up_csv:
-            n = import_chattemplates_from_csv(up_csv)
-            st.success(f"Imported {n} templates.")
-            st.rerun()
+        up_csv = st.file_uploader("Import from CSV", type=["csv"], key="tpl_csv_uploader")
+        if up_csv is not None:
+            raw = up_csv.getvalue()
+            file_sig = f"{up_csv.name}:{len(raw)}:{hashlib.md5(raw).hexdigest()}"
+
+            if ss.get("tpl_csv_last_import") != file_sig:
+                try:
+                    n = import_chattemplates_from_csv(up_csv)
+                    ss["tpl_csv_last_import"] = file_sig
+                    st.success(f"Imported {n} templates.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
 
 elif ss.configMode == "Shortcodes":
     shortcodes = load_shortcodes()

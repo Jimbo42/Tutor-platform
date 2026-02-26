@@ -83,6 +83,39 @@ def nz_int(lo, hi, exclude=None):
         if n != 0 and n not in exclude:
             return n
 
+def factor_pairs(n: int):
+    """
+    Return integer factor pairs for n.
+
+    - For n > 0: (1, n), (2, n/2), ... and also (-1, -n), (-2, -n/2), ...
+    - For n < 0: (-1, |n|), (-2, |n|/2), ... and (1, -|n|), (2, -|n|/2), ...
+    - For n == 0: return [] (special case handled in UI)
+    """
+    n = int(n)
+    if n == 0:
+        return []
+
+    m = abs(n)
+    pairs = []
+    i = 1
+    while i * i <= m:
+        if m % i == 0:
+            a = i
+            b = m // i
+
+            if n > 0:
+                pairs.append((a, b))
+                pairs.append((-a, -b))
+            else:
+                pairs.append((-a, b))
+                pairs.append((a, -b))
+
+        i += 1
+
+    # sort by |a| then |b| for a stable display
+    pairs = sorted(pairs, key=lambda t: (abs(t[0]), abs(t[1]), t[0], t[1]))
+    return pairs
+
 # ==============================
 # 🧩 Problem Generators
 # Each returns: (display_str, target_expr, final_answers)
@@ -1036,7 +1069,8 @@ def factoring_practice():
                     f"**{i}.** {sp.latex(q['target_expr'])}  \n"
                     f"{icon} Final answer: `{q.get('user_answer','')}`  \n"
                     f"Wrong attempts: {q.get('attempts',0)}  \n"
-                    f"Hints used: {q.get('hints_used',0)}"
+                    f"Hints used: {q.get('hints_used',0)}  \n"
+                    f"Factor tool used: {q.get('factor_tool_used_count', 0)}"
                 )
 
         if st.button("🔁 New Practice Set"):
@@ -1066,6 +1100,10 @@ def factoring_practice():
     q.setdefault("hints_shown", [])
     q.setdefault("hint_index", 0)
     q.setdefault("hints_used", 0)
+
+    # Factor-pairs tool tracking (per-question)
+    q.setdefault("factor_tool_used", False)
+    q.setdefault("factor_tool_used_count", 0)
 
     # ✅ Flash correct state (pause + show final before advancing)
     q.setdefault("flash_correct", False)
@@ -1136,6 +1174,23 @@ def factoring_practice():
 
             q["hints_used"] = len(q["hints_shown"])
             st.rerun()
+
+        with st.popover("🧰 Factor Pairs", use_container_width=True):
+            # Code inside a popover only runs when it is opened -> perfect place to track usage
+            q["factor_tool_used"] = True
+            q["factor_tool_used_count"] = q.get("factor_tool_used_count", 0) + 1
+
+            st.caption("Enter an integer and I'll list its factor pairs (including negatives when needed).")
+
+            n = st.number_input("Number", value=12, step=1, format="%d", key=f"fp_num_{idx}")
+
+            nn = int(n)
+            if nn == 0:
+                st.warning("0 has infinitely many factor pairs. Try a non-zero integer.")
+            else:
+                pairs = factor_pairs(nn)
+                st.markdown("**Factor pairs:**")
+                st.write(", ".join([f"({a}, {b})" for a, b in pairs]))
 
         # Render shown hints only (no feedback messages here)
         if q["hints_shown"]:

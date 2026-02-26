@@ -4,6 +4,7 @@ import json
 import re
 import streamlit.components.v1 as components
 import requests
+import streamlit.components.v1 as components
 
 _MATH_BLOCK_OR_INLINE = re.compile(r"(\$\$.*?\$\$|\$.*?\$)", re.DOTALL)
 
@@ -441,24 +442,29 @@ def render_interactive_questions(data, *, ws_key: str = ""):
 def render_matching_exercise(data: dict, *, ws_key: str = ""):
     """
     Matching exercise (aligned rows) + UI polish:
-    - row-aligned [input | term] so boxes line up with terms
+    - row-aligned [input | term | feedback] so boxes line up with terms
     - smaller input height via CSS
     - extra spacing between definition rows
-    - disables browser autocomplete/history dropdowns (SCOPED to these matching inputs only)
-
-    Note: Streamlit does not provide autocomplete="off" on st.text_input; this uses a scoped DOM patch.
+    - disables browser autocomplete/history dropdowns via st.text_input(autocomplete="off")
+    - on_change normalizes entries (uppercase, A..max_letter only) without session_state mutation errors
+    - strike-through used letters in definitions column
     """
     import re
     import streamlit as st
     from streamlit import session_state as ss
-    import streamlit.components.v1 as components
 
+    # -----------------------
+    # Title + instructions
+    # -----------------------
     st.subheader(data.get("title", "Matching Exercise"))
 
     instructions = data.get("instructions")
     if instructions:
         st.markdown(translate_latex(str(instructions)), unsafe_allow_html=True)
 
+    # -----------------------
+    # Load data
+    # -----------------------
     terms = data.get("terms", [])
     defs = data.get("definitions", [])
     answer_map = data.get("answer_map", {})
@@ -493,7 +499,9 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
     max_letter = chr(65 + len(letters) - 1)
     valid_set = set(letters)
 
-    # Scope key
+    # -----------------------
+    # Scope keys
+    # -----------------------
     title_key = normalize_text(data.get("title", "worksheet"))[:30] or "worksheet"
     scope = (normalize_text(ws_key)[:40] if ws_key else title_key) or title_key
     state_key = f"match_{scope}_state"
@@ -502,17 +510,68 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
         ss[state_key] = {"answers": {}, "submitted": False, "score": None}
     state = ss[state_key]
 
-    # Initialize keys to blank
+    # Initialize widget keys to blank
     for i in range(len(terms)):
         k = f"match_{scope}_t_{i}"
         if k not in ss or ss[k] is None:
             ss[k] = ""
 
-    # ---- CSS: smaller input boxes + nicer definition spacing ----
+    # -----------------------
+    # Helpers
+    # -----------------------
+    def _norm_key(i: int) -> str:
+        return f"match_{scope}_t_{i}"
+
+    def _on_letter_change(i: int):
+        """
+        Normalize the typed value safely (callback runs at the right time).
+        """
+        k = _norm_key(i)
+        raw = str(ss.get(k, "") or "")
+        cleaned = re.sub(r"[^A-Za-z]", "", raw).upper()[:1]
+
+        # If it's a letter but not in allowed range, blank it (strict)
+        if cleaned and cleaned not in valid_set:
+            cleaned = ""
+
+        if ss.get(k, "") != cleaned:
+            ss[k] = cleaned
+
+    def _row_status(term_str: str, got: str) -> tuple[str, str, bool]:
+        want = str(answer_map.get(term_str, "")).strip().upper()
+        got = (got or "").strip().upper()
+
+        if not want:
+            return ("", "", True)
+
+        if got == want:
+            return ("✅", "", True)
+
+        return ("❌", f"Correct: {want}", False)
+
+    def _current_used_letters() -> set[str]:
+        """
+        Before submit: use live inputs.
+        After submit: use frozen submitted answers.
+        """
+        if state.get("submitted"):
+            vals = (state.get("answers", {}) or {}).values()
+            return {str(v).strip().upper() for v in vals if str(v).strip()}
+        else:
+            used = set()
+            for i in range(len(terms)):
+                v = str(ss.get(_norm_key(i), "") or "").strip().upper()
+                if v:
+                    used.add(v)
+            return used
+
+    # -----------------------
+    # CSS
+    # -----------------------
     st.markdown(
         f"""
         <style>
-        /* Only shrink inputs that belong to this matching scope (aria-label prefix) */
+        /* Shrink ONLY the matching inputs using aria-label prefix */
         input[aria-label^="match:{scope}:"] {{
             height: 2.0rem !important;
             padding: 0.10rem 0.40rem !important;
@@ -521,83 +580,100 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
         }}
 
         .match-def-item {{
-            margin-bottom: 0.75rem;
-            line-height: 1.35;
+            margin-bottom: 0.95rem;   /* more space between definitions */
+            line-height: 1.45;
+        }}
+        .match-def-used {{
+            opacity: 0.45;
+        }}
+        .match-def-used .def-text {{
+            text-decoration: line-through;
+        }}
+        .match-def-chip {{
+            display: inline-block;
+            padding: 0.05rem 0.35rem;
+            border-radius: 0.5rem;
+            font-size: 0.75rem;
+            border: 1px solid rgba(120,120,120,0.35);
+            margin-left: 0.35rem;
         }}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    # ---- JS: disable autocomplete/history dropdowns (SCOPED) ----
-    components.html(
-        f"""
-        <script>
-        (function() {{
-          const prefix = "match:{scope}:";
-          const inputs = window.parent.document.querySelectorAll('input[type="text"][aria-label^="' + prefix + '"]');
-          inputs.forEach(inp => {{
-            inp.setAttribute('autocomplete', 'off');
-            inp.setAttribute('autocapitalize', 'characters');
-            inp.setAttribute('autocorrect', 'off');
-            inp.setAttribute('spellcheck', 'false');
-            // also hint to password managers / form history
-            inp.setAttribute('inputmode', 'text');
-          }});
-        }})();
-        </script>
-        """,
-        height=0,
-    )
+    # -----------------------
+    # Layout
+    # -----------------------
+    c_left, c_defs = st.columns([2.35, 3.15], vertical_alignment="top")
 
-    # Main layout: left (inputs+terms) | right (definitions)
-    c_left, c_defs = st.columns([2.2, 3.2], vertical_alignment="top")
-
+    # Header
     with c_left:
         st.markdown("### Terms")
-        h1, h2 = st.columns([0.7, 1.9], vertical_alignment="center")
+        h1, h2, h3 = st.columns([0.7, 1.9, 0.8], vertical_alignment="center")
         with h1:
             st.markdown("**Answer**")
         with h2:
             st.markdown("**Term**")
+        with h3:
+            st.markdown("** **")
 
+    # Definitions with "used" strike-through
+    used_letters = _current_used_letters()
     with c_defs:
         st.markdown("### Definitions")
         for L, text in norm_defs:
+            is_used = (L in used_letters)
+            cls = "match-def-item match-def-used" if is_used else "match-def-item"
+            chip = '<span class="match-def-chip">used</span>' if is_used else ""
             st.markdown(
-                f'<div class="match-def-item"><b>{L}.</b> {translate_latex(text)}</div>',
+                f'''
+                <div class="{cls}">
+                  <b>{L}.</b> <span class="def-text">{translate_latex(text)}</span>{chip}
+                </div>
+                ''',
                 unsafe_allow_html=True,
             )
 
-    # Collect entries & validate
+    # -----------------------
+    # Collect entries & validate (row-aligned)
+    # -----------------------
     entries = []
     invalid_rows = set()
 
     with c_left:
         for i, term in enumerate(terms):
             term_str = str(term).strip()
-            key = f"match_{scope}_t_{i}"
+            key = _norm_key(i)
 
-            col_in, col_term = st.columns([0.7, 1.9], vertical_alignment="center")
+            col_in, col_term, col_fb = st.columns([0.7, 1.9, 0.8], vertical_alignment="center")
 
             with col_in:
-                # IMPORTANT: label sets aria-label; we scope CSS/JS off this
-                raw = st.text_input(
+                # label sets aria-label; we scope CSS off this prefix
+                st.text_input(
                     label=f"match:{scope}:{i}",
                     key=key,
                     label_visibility="collapsed",
                     max_chars=1,
                     placeholder="",
                     autocomplete="off",
+                    disabled=bool(state.get("submitted")),
+                    on_change=_on_letter_change,
+                    args=(i,),
                 )
-
-            cleaned = re.sub(r"[^A-Za-z]", "", str(raw or "")).upper()[:1]
-            if cleaned != (raw or ""):
-                ss[key] = cleaned
-                st.rerun()
+                cleaned = str(ss.get(key, "") or "").strip().upper()
 
             with col_term:
                 st.markdown(translate_latex(term_str), unsafe_allow_html=True)
+
+            with col_fb:
+                if state.get("submitted"):
+                    got = str(state.get("answers", {}).get(term_str, "")).strip().upper()
+                    icon, msg, ok = _row_status(term_str, got)
+                    if icon:
+                        st.markdown(f"**{icon}**")
+                    if msg:
+                        st.caption(msg)
 
             if cleaned and cleaned not in valid_set:
                 invalid_rows.add(i)
@@ -626,9 +702,12 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
 
     st.divider()
 
+    # -----------------------
+    # Buttons (Clear uses callback to avoid Streamlit key mutation error)
+    # -----------------------
     def _clear_matching():
         for i in range(len(terms)):
-            ss[f"match_{scope}_t_{i}"] = ""
+            ss[_norm_key(i)] = ""
         ss[state_key] = {"answers": {}, "submitted": False, "score": None}
 
     b1, b2, b3 = st.columns([1, 1, 1])
@@ -649,6 +728,7 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
 
             ss[state_key] = state
             st.rerun()
+
     with b2:
         st.button(
             "🔄 Clear",
@@ -656,18 +736,19 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
             key=f"match_{scope}_clear",
             on_click=_clear_matching,
         )
+
     with b3:
         if st.button("👀 Show key", width="stretch", key=f"match_{scope}_showkey"):
-            answers = {}
-            for i, term in enumerate(terms):
-                term_str = str(term).strip()
-                raw = str(ss.get(f"match_{scope}_t_{i}", "") or "").strip().upper()
-                answers[term_str] = re.sub(r"[^A-Za-z]", "", raw)[:1]
+            # Freeze current entries so feedback column can show
+            answers = {str(terms[i]).strip(): entries[i] for i in range(len(terms))}
             state["answers"] = answers
             state["submitted"] = True
             ss[state_key] = state
             st.rerun()
 
+    # -----------------------
+    # Summary feedback (optional list)
+    # -----------------------
     if state.get("submitted"):
         st.divider()
 

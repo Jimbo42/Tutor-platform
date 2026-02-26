@@ -335,8 +335,8 @@ def validate_questions_schema(obj: dict):
         if not all(isinstance(t, str) and t.strip() for t in terms):
             raise ValueError("Matching worksheet: all terms must be non-empty strings")
 
-        if not isinstance(defs, list) or len(defs) != len(terms):
-            raise ValueError("Matching worksheet must have 'definitions' list the same length as terms")
+        if not isinstance(defs, list) or len(defs) < len(terms):
+            raise ValueError("Matching worksheet must have 'definitions' list length >= terms length")
 
         # Allow defs as list[str] OR list[{"letter":...,"text":...}]
         norm_defs = []
