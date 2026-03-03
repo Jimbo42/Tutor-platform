@@ -7,6 +7,15 @@ from datetime import datetime
 
 from shared.google_db import get_sheet, get_drive_service
 from shared.content_renderer import render_questions_worksheet
+from shared.google_db import (
+    publish_item,
+    upload_interactive_json,
+    upload_pdf_bytes,
+    download_drive_file_bytes,
+    update_drive_file_bytes,
+    safe_filename,
+    delete_drive_file,
+)
 
 # -----------------------------
 # Sheet tabs (must exist)
@@ -47,38 +56,9 @@ def _load_interactive_json_cached(file_id: str, *, force_refresh: bool = False) 
     ss.pm_interactive_cache_meta = meta
     return obj
 
-def _download_drive_file_bytes(file_id: str) -> bytes:
-    """
-    Download a Drive file as bytes using the Drive API client
-    (which should be OAuth-based in your environment for My Drive uploads).
-    """
-    if not file_id:
-        raise ValueError("Missing file_id")
-
-    service = get_drive_service()
-    request = service.files().get_media(fileId=file_id)
-
-    fh = io.BytesIO()
-    from googleapiclient.http import MediaIoBaseDownload  # local import
-
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return fh.getvalue()
-
-
 def _download_interactive_json(file_id: str) -> dict:
-    raw = _download_drive_file_bytes(file_id)
+    raw = download_drive_file_bytes(file_id)
     return json.loads(raw.decode("utf-8"))
-
-
-def _delete_drive_file(file_id: str):
-    """Best-effort delete. If permissions prevent it, we'll surface the error."""
-    service = get_drive_service()
-    service.files().delete(fileId=file_id).execute()
-
-
 # -----------------------------
 # Sheets helpers
 # -----------------------------
@@ -168,133 +148,6 @@ def _delete_catalog_row(tab_name: str, published_id: str):
     if not row_num:
         raise ValueError(f"Could not find published_id='{published_id}' in tab '{tab_name}'.")
     ws.delete_rows(row_num)
-
-def render_questions_interactive_preview(obj: dict, key_prefix: str = "iprev"):
-    """
-    Dialog-safe minimal interactive player for JSON like:
-    {
-      "type": "questions",
-      "questions": [
-        {"question": "...", "choices": [...], "correct_index": 0, "explanation": "..."},
-        ...
-      ]
-    }
-
-    IMPORTANT: No st.rerun() calls (dialogs can blank with forced reruns).
-    Button clicks naturally rerun the app.
-    """
-    if not isinstance(obj, dict) or obj.get("type") != "questions":
-        st.info("This interactive is not a 'questions' worksheet type. Showing JSON instead:")
-        st.json(obj)
-        return
-
-    questions = obj.get("questions", [])
-    if not isinstance(questions, list) or not questions:
-        st.warning("No questions found in this interactive.")
-        st.json(obj)
-        return
-
-    idx_key = f"{key_prefix}_idx"
-    answered_key = f"{key_prefix}_answered"
-    score_key = f"{key_prefix}_score"
-
-    # Ensure keys exist
-    ss.setdefault(idx_key, 0)
-    ss.setdefault(answered_key, False)
-    ss.setdefault(score_key, 0)
-
-    # Clamp index
-    i = int(ss[idx_key])
-    i = max(0, min(i, len(questions) - 1))
-    ss[idx_key] = i
-
-    q = questions[i] if isinstance(questions[i], dict) else {}
-
-    q_text = q.get("question") or q.get("prompt") or q.get("text") or f"Question {i+1}"
-    choices = q.get("choices") or q.get("options") or []
-    if not isinstance(choices, list):
-        choices = []
-
-    correct_index = q.get("correct_index", q.get("answer_index"))
-    try:
-        correct_index = int(correct_index) if correct_index is not None else None
-    except Exception:
-        correct_index = None
-
-    explanation = q.get("explanation") or q.get("explain") or ""
-
-    # Header
-    c1, c2, c3 = st.columns([2, 1, 1], vertical_alignment="center")
-    with c1:
-        st.markdown(f"### Question {i+1} of {len(questions)}")
-    with c2:
-        st.metric("Score", int(ss[score_key]))
-    with c3:
-        if st.button("↩ Reset", width="stretch", key=f"{key_prefix}_reset"):
-            ss[idx_key] = 0
-            ss[answered_key] = False
-            ss[score_key] = 0
-            # just return; click triggers rerun
-            return
-
-    st.markdown(q_text)
-
-    if not choices:
-        st.warning("This question has no choices (cannot preview interactively).")
-        st.json(q)
-        return
-
-    disabled = bool(ss[answered_key])
-
-    # Use a per-question radio key so moving next/prev resets selection cleanly
-    radio_key = f"{key_prefix}_choice_q{i}"
-    sel = st.radio(
-        "Choose one:",
-        options=list(range(len(choices))),
-        format_func=lambda k: f"{chr(65+k)}. {choices[k]}",
-        key=radio_key,
-        disabled=disabled,
-    )
-
-    # Actions
-    a1, a2, a3 = st.columns([1, 1, 1])
-    with a1:
-        if st.button("✅ Submit", width="stretch", disabled=disabled, key=f"{key_prefix}_submit"):
-            ss[answered_key] = True
-            if correct_index is not None and int(sel) == correct_index:
-                ss[score_key] = int(ss[score_key]) + 1
-            return
-
-    with a2:
-        if st.button("⟵ Prev", width="stretch", disabled=(i == 0), key=f"{key_prefix}_prev"):
-            ss[idx_key] = max(0, i - 1)
-            ss[answered_key] = False
-            return
-
-    with a3:
-        if st.button("Next ⟶", width="stretch", disabled=(i >= len(questions) - 1), key=f"{key_prefix}_next"):
-            ss[idx_key] = min(len(questions) - 1, i + 1)
-            ss[answered_key] = False
-            return
-
-    # Feedback
-    if ss[answered_key]:
-        if correct_index is None:
-            st.info("No correct_index provided for this question.")
-        else:
-            if 0 <= correct_index < len(choices):
-                correct_text = f"{chr(65+correct_index)}. {choices[correct_index]}"
-            else:
-                correct_text = "(correct_index out of range)"
-
-            if int(sel) == correct_index:
-                st.success(f"✅ Correct — {correct_text}")
-            else:
-                st.error(f"❌ Not quite. Correct answer: {correct_text}")
-
-        if explanation:
-            st.markdown("**Explanation**")
-            st.write(explanation)
 
 # -----------------------------
 # Dialogs
@@ -390,6 +243,9 @@ def open_preview_dialog():
 
     st.divider()
     if st.button("Close", width="stretch"):
+        ss.pm_preview_item = None
+        ss.pm_preview_obj = None
+        ss.pm_preview_error = None
         st.rerun()
 
 @st.dialog("🗑 Delete Published Item", width="large")
@@ -417,12 +273,23 @@ def open_delete_dialog(item: dict):
 
     if st.button("❌ Confirm Delete", width="stretch"):
         try:
+
+            # Close preview + clear cache for this file before deleting
+            if ss.get("pm_preview_item", {}).get("drive_file_id") == file_id:
+                ss.pm_preview_item = None
+                ss.pm_preview_obj = None
+                ss.pm_preview_error = None
+
+            if file_id:
+                ss.pm_interactive_cache.pop(file_id, None)
+                ss.pm_interactive_cache_meta.pop(file_id, None)
+
             # 1) Remove from catalog tab
             _delete_catalog_row(tab_name, published_id)
 
             # 2) Optionally delete Drive file
             if delete_drive_too and file_id:
-                _delete_drive_file(file_id)
+                delete_drive_file(file_id)
 
             st.toast("Deleted", icon="🗑️")
             st.rerun()
@@ -430,12 +297,171 @@ def open_delete_dialog(item: dict):
         except Exception as e:
             st.error(f"Delete failed: {e}")
 
+@st.dialog("✏️ Edit Interactive JSON", width="large")
+def open_edit_interactive_json_dialog(item: dict):
+    """
+    Loads an interactive JSON file from Drive (by drive_file_id),
+    lets you edit it, and saves back to the same file_id.
+    """
+    title = (item.get("title") or "").strip() or "Untitled"
+    file_id = (item.get("drive_file_id") or "").strip()
+
+    st.subheader(title)
+    st.caption(f"Drive file_id: {file_id}")
+    st.divider()
+
+    if not file_id:
+        st.error("This item is missing drive_file_id.")
+        return
+
+    # Load JSON bytes from Drive
+    try:
+        raw_bytes = download_drive_file_bytes(file_id)
+        raw_text = raw_bytes.decode("utf-8", errors="replace")
+        obj = json.loads(raw_text)
+    except Exception as e:
+        st.error(f"Could not load JSON from Drive: {e}")
+        return
+
+    edited = st.text_area(
+        "Worksheet JSON",
+        value=json.dumps(obj, ensure_ascii=False, indent=2),
+        height=520,
+    )
+
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        if st.button("✅ Validate", width="stretch"):
+            try:
+                parsed = json.loads(edited)
+                if not isinstance(parsed, dict):
+                    st.error("Top-level JSON must be an object.")
+                else:
+                    st.success("Valid JSON ✅")
+                    st.caption(
+                        f"type={parsed.get('type')} • "
+                        f"questions={len(parsed.get('questions', [])) if isinstance(parsed.get('questions'), list) else 'n/a'}"
+                    )
+            except Exception as e:
+                st.error(f"Invalid JSON: {e}")
+
+    with c2:
+        if st.button("💾 Save to Drive", width="stretch"):
+            try:
+                parsed = json.loads(edited)
+            except Exception as e:
+                st.error(f"Invalid JSON: {e}")
+                return
+
+            if not isinstance(parsed, dict):
+                st.error("Top-level JSON must be an object.")
+                return
+
+            try:
+                data = json.dumps(parsed, ensure_ascii=False, indent=2).encode("utf-8")
+                update_drive_file_bytes(file_id=file_id, data=data, mime_type="application/json")
+                st.toast("Saved to Drive ✅", icon="💾")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+    with c3:
+        if st.button("Close", width="stretch"):
+            st.rerun()
 
 # -----------------------------
 # Page
 # -----------------------------
 def show_published_manager():
     st.markdown("## 📦 Published Content Manager")
+
+    with st.expander("➕ Import external JSON/PDF and publish", expanded=False):
+        st.caption(
+            "Upload a local .json (interactive) or .pdf (notes). It will upload to Drive and publish to the student catalog.")
+
+        up = st.file_uploader("Choose file", type=["json", "pdf"], key="pm_import_file")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            imp_title = st.text_input("Title", value="", key="pm_import_title")
+        with c2:
+            imp_subject = st.text_input("Subject", value="Other", key="pm_import_subject")
+        with c3:
+            imp_grade = st.text_input("Grade", value="—", key="pm_import_grade")
+
+        make_public = st.checkbox("Make accessible to anyone with the link", value=True, key="pm_import_public")
+
+        if up is None:
+            st.info("Upload a .json or .pdf to enable publishing.")
+        else:
+            ext = up.name.lower().split(".")[-1]
+            st.write(f"Detected: **.{ext}**")
+
+            if st.button("📤 Upload + Publish", width="stretch", key="pm_import_publish"):
+                if not imp_title.strip():
+                    st.error("Title is required.")
+                    return
+
+                try:
+                    if ext == "json":
+                        # Validate JSON
+                        raw = up.read()
+                        obj = json.loads(raw.decode("utf-8"))
+
+                        if not isinstance(obj, dict):
+                            raise ValueError("Top-level JSON must be an object.")
+
+                        if obj.get("type") != "questions":
+                            st.warning("Normalizing worksheet JSON: forcing type='questions'")
+                            obj["type"] = "questions"
+
+                        payload = upload_interactive_json(
+                            obj=obj,
+                            title=imp_title.strip(),
+                            filename=safe_filename(imp_title.strip(), ".json"),
+                            make_public=make_public,
+                        )
+
+                        publish_item(
+                            title=imp_title.strip(),
+                            subject=imp_subject.strip(),
+                            grade=imp_grade.strip(),
+                            content_type="interactive",
+                            content=payload,
+                            source_app="TutorTrack",
+                            notes=f"Imported upload: {up.name}",
+                        )
+
+                        st.toast("Imported + published interactive ✅", icon="✅")
+                        st.rerun()
+
+                    elif ext == "pdf":
+                        pdf_bytes = up.read()
+
+                        payload = upload_pdf_bytes(
+                            pdf_bytes=pdf_bytes,
+                            title=imp_title.strip(),
+                            filename=safe_filename(imp_title.strip(), ".pdf"),
+                            make_public=make_public,
+                        )
+
+                        publish_item(
+                            title=imp_title.strip(),
+                            subject=imp_subject.strip(),
+                            grade=imp_grade.strip(),
+                            content_type="pdf",
+                            content=payload,
+                            source_app="TutorTrack",
+                            notes=f"Imported upload: {up.name}",
+                        )
+
+                        st.toast("Imported + published PDF ✅", icon="✅")
+                        st.rerun()
+
+                    else:
+                        st.error("Unsupported file type.")
+                except Exception as e:
+                    st.error(f"Import/publish failed: {e}")
 
     # Load both tabs
     try:
@@ -445,13 +471,13 @@ def show_published_manager():
         pdf_rows = []
 
     try:
-        инт_rows = _load_tab_records(TAB_INTERACTIVES)
+        int_rows = _load_tab_records(TAB_INTERACTIVES)
     except Exception as e:
         st.error(f"Could not load '{TAB_INTERACTIVES}': {e}")
-        инт_rows = []
+        int_rows = []
 
     df_p = _normalize_catalog_records(pdf_rows, "pdf")
-    df_i = _normalize_catalog_records(инт_rows, "interactive")
+    df_i = _normalize_catalog_records(int_rows, "interactive")
 
     df = pd.concat([df_p, df_i], ignore_index=True) if (not df_p.empty or not df_i.empty) else pd.DataFrame()
 
@@ -589,10 +615,10 @@ def show_published_manager():
                 # Quick links
                 view_url = row.get("drive_view_url", "")
                 if view_url:
-                    st.markdown(f"[Open in Drive]({view_url})")
+                    st.link_button("Open in Drive", view_url, width="stretch")
             with right:
                 # actions
-                a1, a2 = st.columns(2)
+                a1, a2, a3  = st.columns(3)
                 with a1:
                     if st.button("👁 Preview", key=f"pm_prev_{i}", width="stretch"):
                         item = row.to_dict()
@@ -619,4 +645,10 @@ def show_published_manager():
                     if st.button("🗑 Delete", key=f"pm_del_{i}", width="stretch"):
                         open_delete_dialog(row.to_dict())
 
+                with a3:
+                    if ctype == "interactive":
+                        if st.button("✏️ Edit", key=f"pm_edit_{i}", width="stretch"):
+                            open_edit_interactive_json_dialog(row.to_dict())
+
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+

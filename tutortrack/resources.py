@@ -8,7 +8,7 @@ import re
 
 from shared.formulas import show_formulas
 from published_manager import show_published_manager
-from tutortrack.lessons import get_conn
+from shared.sqlite_db import get_conn
 
 _DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 _DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")

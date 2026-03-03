@@ -65,12 +65,103 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from google.oauth2.credentials import Credentials as UserCredentials
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
 
 # ---------------------------
 # Published catalog (Google Sheets tabs)
 # ---------------------------
 PUBLISHED_PDFS_TAB = "Published_PDFs"
 PUBLISHED_INTERACTIVES_TAB = "Published_Interactives"
+
+class GoogleDriveUserFacingError(RuntimeError):
+    """A clean, user-facing Drive error with actionable instructions."""
+    pass
+
+def _drive_error_message(prefix: str, detail: str, fix: str) -> str:
+    return (
+        f"{prefix}\n\n"
+        f"Details: {detail}\n\n"
+        f"Fix: {fix}\n"
+    )
+
+
+def _raise_drive_user_facing_error(exc: Exception, *, context: str):
+    """
+    Convert common google auth/drive exceptions into a friendly error.
+    """
+    # 1) OAuth token revoked/expired
+    if isinstance(exc, RefreshError):
+        msg = _drive_error_message(
+            prefix=f"Google Drive authorization failed while {context}.",
+            detail="Your OAuth token was expired or revoked (invalid_grant).",
+            fix=(
+                "Generate a NEW refresh_token and update secrets.toml [gdrive_oauth].\n"
+                "Then restart Streamlit and try again."
+            ),
+        )
+        raise GoogleDriveUserFacingError(msg) from exc
+
+    # 2) Drive API HttpError (permissions, quota, etc.)
+    if isinstance(exc, HttpError):
+        # Try to extract readable content
+        try:
+            raw = exc.content.decode("utf-8", errors="ignore") if hasattr(exc, "content") else str(exc)
+        except Exception:
+            raw = str(exc)
+
+        status = getattr(exc.resp, "status", None)
+
+        # Service account quota issue
+        if status == 403 and ("Service Accounts do not have storage quota" in raw or "storageQuotaExceeded" in raw):
+            msg = _drive_error_message(
+                prefix=f"Google Drive upload blocked while {context}.",
+                detail="Service accounts cannot upload into My Drive because they have no storage quota.",
+                fix=(
+                    "Use personal OAuth for Drive uploads (recommended for My Drive), OR\n"
+                    "upload into a Shared Drive (Workspace), OR\n"
+                    "enable domain-wide delegation (Workspace admin)."
+                ),
+            )
+            raise GoogleDriveUserFacingError(msg) from exc
+
+        # Public sharing disallowed / permissions errors
+        if status == 403 and ("insufficientFilePermissions" in raw or "cannotShare" in raw or "forbidden" in raw):
+            msg = _drive_error_message(
+                prefix=f"Google Drive permission error while {context}.",
+                detail=raw[:4000],
+                fix=(
+                    "Confirm you have access to the target folder and that link sharing is allowed.\n"
+                    "If using service account, confirm the folder is shared with the service account email."
+                ),
+            )
+            raise GoogleDriveUserFacingError(msg) from exc
+
+        # Not found (wrong folder id / not shared)
+        if status == 404:
+            msg = _drive_error_message(
+                prefix=f"Google Drive folder/file not found while {context}.",
+                detail=raw[:2000],
+                fix="Verify the folder_id / file_id is correct and shared with the account being used.",
+            )
+            raise GoogleDriveUserFacingError(msg) from exc
+
+        # Fallback for other HttpErrors
+        msg = _drive_error_message(
+            prefix=f"Google Drive error while {context}.",
+            detail=raw[:4000],
+            fix="See details above. If this persists, re-auth (OAuth) or verify folder permissions.",
+        )
+        raise GoogleDriveUserFacingError(msg) from exc
+
+    # Unknown
+    raise GoogleDriveUserFacingError(
+        _drive_error_message(
+            prefix=f"Unexpected Google Drive error while {context}.",
+            detail=str(exc),
+            fix="Check your Google configuration and credentials.",
+        )
+    ) from exc
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -282,48 +373,86 @@ def get_credentials(
         scopes=scopes,
     )
 
-#
 # def get_drive_service():
-#     """Cached Drive service client (Drive API v3)."""
-#     if "drive_service" not in st.session_state:
-#         st.session_state["drive_service"] = build(
-#             "drive",
-#             "v3",
-#             credentials=get_credentials(scopes=["https://www.googleapis.com/auth/drive"]),
-#             cache_discovery=False,
+#     """Cached Drive service client (Drive API v3). Prefer user OAuth for My Drive uploads."""
+#     if "drive_service" in st.session_state:
+#         return st.session_state["drive_service"]
+#
+#     # ✅ Use OAuth user creds if present (personal My Drive quota)
+#     if "gdrive_oauth" in st.secrets:
+#         cfg = st.secrets["gdrive_oauth"]
+#         creds = UserCredentials(
+#             token=None,
+#             refresh_token=cfg["refresh_token"],
+#             token_uri=cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
+#             client_id=cfg["client_id"],
+#             client_secret=cfg["client_secret"],
+#             scopes=["https://www.googleapis.com/auth/drive.file"],
 #         )
+#         creds.refresh(Request())
+#         st.session_state["drive_service"] = build(
+#             "drive", "v3", credentials=creds, cache_discovery=False
+#         )
+#         return st.session_state["drive_service"]
+#
+#     # Fallback: service account (uploads to My Drive will fail with quota error)
+#     st.session_state["drive_service"] = build(
+#         "drive",
+#         "v3",
+#         credentials=get_credentials(scopes=["https://www.googleapis.com/auth/drive"]),
+#         cache_discovery=False,
+#     )
 #     return st.session_state["drive_service"]
 
 def get_drive_service():
-    """Cached Drive service client (Drive API v3). Prefer user OAuth for My Drive uploads."""
+    """
+    Cached Drive service client (Drive API v3).
+
+    - Uses USER OAuth (refresh_token) for Drive uploads to My Drive (uses your quota).
+    - Falls back to service account only if OAuth isn't configured.
+    - Provides a clear error when refresh token is revoked/expired.
+    """
     if "drive_service" in st.session_state:
         return st.session_state["drive_service"]
 
-    # ✅ Use OAuth user creds if present (personal My Drive quota)
+    # ✅ Prefer OAuth user creds for My Drive uploads
     if "gdrive_oauth" in st.secrets:
         cfg = st.secrets["gdrive_oauth"]
-        creds = UserCredentials(
-            token=None,
-            refresh_token=cfg["refresh_token"],
-            token_uri=cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
-            client_id=cfg["client_id"],
-            client_secret=cfg["client_secret"],
-            scopes=["https://www.googleapis.com/auth/drive.file"],
-        )
-        creds.refresh(Request())
+        try:
+            creds = UserCredentials(
+                token=None,
+                refresh_token=cfg.get("refresh_token"),
+                token_uri=cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
+                client_id=cfg["client_id"],
+                client_secret=cfg["client_secret"],
+                # Use full drive scope because you also set permissions
+                scopes=["https://www.googleapis.com/auth/drive"],
+            )
+
+            if not creds.refresh_token:
+                raise RefreshError("Missing refresh_token in [gdrive_oauth].")
+
+            creds.refresh(Request())
+
+            st.session_state["drive_service"] = build(
+                "drive", "v3", credentials=creds, cache_discovery=False
+            )
+            return st.session_state["drive_service"]
+
+        except Exception as e:
+            _raise_drive_user_facing_error(e, context="initializing Drive service (OAuth refresh)")
+
+    # Fallback: service account (NOTE: uploads to My Drive may fail with quota error)
+    try:
         st.session_state["drive_service"] = build(
-            "drive", "v3", credentials=creds, cache_discovery=False
+            "drive",
+            "v3",
+            credentials=get_credentials(scopes=["https://www.googleapis.com/auth/drive"]),
+            cache_discovery=False,
         )
         return st.session_state["drive_service"]
-
-    # Fallback: service account (uploads to My Drive will fail with quota error)
-    st.session_state["drive_service"] = build(
-        "drive",
-        "v3",
-        credentials=get_credentials(scopes=["https://www.googleapis.com/auth/drive"]),
-        cache_discovery=False,
-    )
-    return st.session_state["drive_service"]
+    except Exception as e:
+        _raise_drive_user_facing_error(e, context="initializing Drive service (service account)")
 
 def get_gspread_client():
     """Cached gspread client for Google Sheets."""
@@ -410,6 +539,44 @@ def save_pref(username: str, theme: str | None = None, difficulty: str | None = 
 # ---------------------------
 # Google Drive helpers
 # ---------------------------
+# def upload_bytes_to_drive(
+#     *,
+#     data: bytes,
+#     filename: str,
+#     mime_type: str,
+#     folder_id: str,
+# ) -> str:
+#     """
+#     Upload bytes to a Drive folder and return file_id.
+#     """
+#     if not folder_id:
+#         raise ValueError("folder_id is required (raw Drive folder id)")
+#
+#     service = get_drive_service()
+#     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
+#
+#     file_metadata = {"name": filename, "parents": [folder_id]}
+#     created = service.files().create(
+#         body=file_metadata,
+#         media_body=media,
+#         fields="id",
+#     ).execute()
+#
+#     return created["id"]
+
+def delete_drive_file(file_id: str):
+    """
+    Delete a Drive file (best effort). Raises GoogleDriveUserFacingError with clear guidance.
+    """
+    if not file_id:
+        raise ValueError("file_id is required")
+
+    try:
+        service = get_drive_service()
+        service.files().delete(fileId=file_id).execute()
+    except Exception as e:
+        _raise_drive_user_facing_error(e, context=f"deleting Drive file {file_id}")
+
 def upload_bytes_to_drive(
     *,
     data: bytes,
@@ -419,61 +586,71 @@ def upload_bytes_to_drive(
 ) -> str:
     """
     Upload bytes to a Drive folder and return file_id.
+    Raises GoogleDriveUserFacingError with clear instructions on failure.
     """
     if not folder_id:
         raise ValueError("folder_id is required (raw Drive folder id)")
 
-    service = get_drive_service()
-    media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
-
-    file_metadata = {"name": filename, "parents": [folder_id]}
-    created = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields="id",
-    ).execute()
-
-    return created["id"]
-
+    try:
+        service = get_drive_service()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
+        file_metadata = {"name": filename, "parents": [folder_id]}
+        created = (
+            service.files()
+            .create(body=file_metadata, media_body=media, fields="id")
+            .execute()
+        )
+        return created["id"]
+    except Exception as e:
+        _raise_drive_user_facing_error(e, context=f"uploading '{filename}' to folder {folder_id}")
 
 def download_drive_file_bytes(file_id: str) -> bytes:
-    """Download Drive file into memory, return bytes."""
-    service = get_drive_service()
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
+    """Download Drive file into memory, return bytes. Raises GoogleDriveUserFacingError on failure."""
+    if not file_id:
+        raise ValueError("file_id is required")
 
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
+    try:
+        service = get_drive_service()
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
 
-    return fh.getvalue()
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
 
-#
-# def set_drive_file_public_read(file_id: str):
-#     """
-#     Make a file readable by anyone with the link.
-#     Useful when TutorAssist embeds/loads without auth.
-#     """
-#     service = get_drive_service()
-#     service.permissions().create(
-#         fileId=file_id,
-#         body={"type": "anyone", "role": "reader"},
-#         fields="id",
-#     ).execute()
+        return fh.getvalue()
+    except Exception as e:
+        _raise_drive_user_facing_error(e, context=f"downloading Drive file {file_id}")
 
 def set_drive_file_public_read(file_id: str):
     """Best-effort: make file readable by anyone with the link."""
-    service = get_drive_service()
     try:
+        service = get_drive_service()
         service.permissions().create(
             fileId=file_id,
             body={"type": "anyone", "role": "reader"},
             fields="id",
         ).execute()
+    except GoogleDriveUserFacingError:
+        # If Drive auth is broken, surface it (publishing can't continue reliably)
+        raise
     except Exception:
         # If the account disallows public link sharing, don't fail the publish.
         pass
+
+# def set_drive_file_public_read(file_id: str):
+#     """Best-effort: make file readable by anyone with the link."""
+#     service = get_drive_service()
+#     try:
+#         service.permissions().create(
+#             fileId=file_id,
+#             body={"type": "anyone", "role": "reader"},
+#             fields="id",
+#         ).execute()
+#     except Exception:
+#         # If the account disallows public link sharing, don't fail the publish.
+#         pass
 
 def upload_interactive_json(
     *,
@@ -564,3 +741,34 @@ def upload_pdf_bytes(
         "preview_url": urls["preview_url"],
         "download_url": urls["download_url"],
     }
+
+# def update_drive_file_bytes(*, file_id: str, data: bytes, mime_type: str):
+#     """
+#     Replace the contents of an existing Drive file (same file_id).
+#     Useful for editing interactive JSON in place.
+#     """
+#     if not file_id:
+#         raise ValueError("file_id is required")
+#
+#     service = get_drive_service()
+#     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
+#
+#     service.files().update(
+#         fileId=file_id,
+#         media_body=media,
+#     ).execute()
+
+def update_drive_file_bytes(*, file_id: str, data: bytes, mime_type: str):
+    """
+    Replace the contents of an existing Drive file (same file_id).
+    Useful for editing interactive JSON in place.
+    """
+    if not file_id:
+        raise ValueError("file_id is required")
+
+    try:
+        service = get_drive_service()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
+        service.files().update(fileId=file_id, media_body=media).execute()
+    except Exception as e:
+        _raise_drive_user_facing_error(e, context=f"updating Drive file {file_id}")

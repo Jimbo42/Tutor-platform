@@ -117,9 +117,11 @@ pages = {
         st.Page("home.py", title="Home", default=True),
     ],
     "Math Skills Challenges": [
-        st.Page("math_factoring.py", title="Factoring"),
         st.Page("math_numeracy.py", title="NumerAce"),
+        st.Page("math_factoring.py", title="Factoring"),
+        st.Page("math_equations.py", title="Solving Equations"),
     ],
+
     "Library": [
         st.Page("library.py", title="Library"),
     ],

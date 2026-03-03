@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from tutortrack.lessons import get_conn
+from shared.sqlite_db import get_conn
 from shared.google_db import publish_item
 from shared.content_renderer import render_questions_worksheet, translate_latex
 from shared.google_db import (
@@ -1059,9 +1059,48 @@ def edit_save_dialog():
             st.success("Published PDF to Student Library ✅")
             st.rerun()
 
+@st.dialog("Revise Interactive JSON", width="large")
+def revise_json_dialog():
+    if not ss.get("last_json_parsed") or ss.get("last_output_kind") != "interactive":
+        st.warning("No interactive JSON is available to revise yet.")
+        return
+
+    if not ss.get("last_request_prompt"):
+        st.warning("Missing the original request prompt for this JSON (ss.last_request_prompt).")
+        return
+
+    st.markdown("### Send correction notes and regenerate the JSON")
+    st.caption("This will *not* resend the full chat history—only the original request + last JSON + your notes.")
+
+    ss.revision_notes = st.text_area(
+        "Correction notes",
+        value=ss.get("revision_notes", ""),
+        height=200,
+        placeholder="Example: Ensure 8 pairs, include 2 distractors, only first four rows, half ions, etc.",
+    )
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("🔁 Regenerate JSON", use_container_width=True):
+            ss.pending_revision = True
+            st.rerun()
+
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            ss.pending_revision = False
+            return
+
 def render_latest_preview():
     if not ss.get("last_response"):
         return
+    if "last_request_prompt" not in ss:
+        ss.last_request_prompt = None  # the user prompt that produced last_json_parsed
+
+    if "pending_revision" not in ss:
+        ss.pending_revision = False
+
+    if "revision_notes" not in ss:
+        ss.revision_notes = ""
 
     st.markdown("## ✅ Latest Output Preview")
 
@@ -1069,6 +1108,15 @@ def render_latest_preview():
 
         if is_interactive_response(ss.last_response):
             st.caption("Detected: **Interactive (JSON)**")
+
+            # ✅ Add revise button
+            colA, colB = st.columns([1, 1])
+            with colA:
+                if st.button("🔁 Revise JSON (send correction notes)", width="stretch"):
+                    revise_json_dialog()
+            with colB:
+                pass
+
             if isinstance(ss.last_response, dict) and ss.last_response.get("type") == "questions":
                 render_questions_worksheet(ss.last_response)
             else:
@@ -1076,6 +1124,58 @@ def render_latest_preview():
                 st.json(ss.last_response)
 
     st.divider()
+
+def _json_only_system(system_prompt: str) -> str:
+    """
+    Ensure the system prompt strongly enforces 'RETURN ONLY JSON'.
+    """
+    base = system_prompt or ""
+    guard = (
+        "\n\nIMPORTANT OUTPUT RULES:\n"
+        "- Return ONLY valid JSON.\n"
+        "- Do not wrap JSON in markdown fences.\n"
+        "- Do not include commentary, headings, or extra text.\n"
+    )
+    return base.strip() + guard
+
+
+def build_api_messages_for_generation(*, system_prompt: str, user_prompt: str) -> list[dict]:
+    """
+    Minimal context for initial generation.
+    """
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_api_messages_for_revision(
+    *,
+    system_prompt: str,
+    original_request: str,
+    last_json_obj,
+    revision_notes: str,
+) -> list[dict]:
+    """
+    Minimal context for revision:
+      system + original request + last JSON + notes.
+    """
+    last_json_text = json.dumps(last_json_obj, ensure_ascii=False, indent=2)
+
+    user_notes = (
+        "Revise the interactive JSON based on the correction notes.\n"
+        "Keep the same overall worksheet intent unless the notes explicitly change it.\n"
+        "Return ONLY the updated JSON.\n\n"
+        "Correction notes:\n"
+        f"{revision_notes.strip()}\n"
+    )
+
+    return [
+        {"role": "system", "content": _json_only_system(system_prompt)},
+        {"role": "user", "content": original_request.strip()},
+        {"role": "assistant", "content": last_json_text},
+        {"role": "user", "content": user_notes},
+    ]
 
 # Rendering prompts page
 
@@ -1238,13 +1338,31 @@ user_prompt = st.chat_input("What do you want to know?")
 if user_prompt:
     ss.pending_prompt = user_prompt
 
+# =========================
+# SEND / REVISE EXECUTION
+# (drop-in replacement block)
+# =========================
+
+def looks_like_json(s: str) -> bool:
+    s = (s or "").lstrip()
+    return s.startswith("{") or s.startswith("[")
+
+
+# -------------------------
+# 1) Normal prompt send
+# -------------------------
 if ss.pending_prompt:
+
     prompt_to_send = ss.pending_prompt
     ss.pending_prompt = None
 
-    # Add user message to chat history
+    # Save the "original request" so revisions can reuse it
+    ss.last_request_prompt = prompt_to_send
+
+    # Add user message to chat history (for UI display only)
     ss.messages.append({"role": "user", "content": prompt_to_send})
-    # Display user message in chat message container
+
+    # Display user message
     with st.chat_message("user"):
         st.markdown(prompt_to_send)
 
@@ -1264,21 +1382,33 @@ if ss.pending_prompt:
             "and display equations in $$...$$. Never output bare LaTeX commands without delimiters."
         )
 
+        expects_json = template_expects_json(ss.template_system)
+
+        # ✅ Key change: do NOT send full chat history for JSON templates
+        if expects_json:
+            api_messages = build_api_messages_for_generation(
+                system_prompt=_json_only_system(system_prompt),
+                user_prompt=prompt_to_send,
+            )
+        else:
+            # keep your existing behavior for general chat
+            api_messages = (
+                [{"role": "system", "content": system_prompt}]
+                + [{"role": m["role"], "content": m["content"]} for m in ss.messages]
+            )
+
         stream = client.chat.completions.create(
             model=model,
             temperature=temperature,
             top_p=top_p,
             frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty,
-            messages=[
-                         {"role": "system", "content": system_prompt}
-                     ] + [{"role": m["role"], "content": m["content"]} for m in ss.messages],
+            messages=api_messages,
             stream=True,
             stream_options={"include_usage": True},
         )
 
         response = ""
-
         for chunk in stream:
             if hasattr(chunk, "choices") and chunk.choices:
                 delta = chunk.choices[0].delta
@@ -1286,21 +1416,12 @@ if ss.pending_prompt:
                     response += delta.content
                     response_container.markdown(translate_latex(response))
 
-        # Final render safety
         response_container.markdown(translate_latex(response))
 
+    # Store assistant response in chat history (for UI display)
     ss.messages.append({"role": "assistant", "content": response})
 
     # ---- Decide whether we should attempt JSON parsing ----
-    # Prefer template_system when present, but also allow "response looks like JSON" fallback
-    expects_json = template_expects_json(ss.template_system)
-
-
-    def looks_like_json(s: str) -> bool:
-        s = (s or "").lstrip()
-        return s.startswith("{") or s.startswith("[")
-
-
     should_try_json = expects_json or looks_like_json(response)
 
     # Default: store raw response as notes
@@ -1312,7 +1433,6 @@ if ss.pending_prompt:
         parsed_ok = False
         schema_ok = False
 
-        # ---------- TRY PARSE ----------
         try:
             parsed = json.loads(response)
             parsed_ok = isinstance(parsed, (dict, list))
@@ -1320,26 +1440,22 @@ if ss.pending_prompt:
             st.error("❌ Model did not return valid JSON.")
             st.code(response)
 
-        # Always keep the parsed object if we got one (even if schema fails)
         if parsed_ok:
             ss.last_json_parsed = parsed
 
-            # ---------- TRY SCHEMA (only if it is the worksheet type) ----------
             try:
                 if isinstance(parsed, dict) and parsed.get("type") == "questions":
                     validate_questions_schema(parsed)
                     schema_ok = True
                 else:
-                    # Non-worksheet JSON is still "interactive-ish" for publishing
                     schema_ok = True
             except Exception as e:
                 st.error(f"❌ JSON schema invalid: {e}")
                 st.json(parsed)
                 schema_ok = False
 
-            # If parse succeeded, treat output as interactive for Edit/Save
             ss.last_output_kind = "interactive"
-            ss.last_response = parsed  # so your existing preview/edit logic can use it
+            ss.last_response = parsed
 
             if schema_ok:
                 st.success("✅ Valid worksheet JSON generated.")
@@ -1348,7 +1464,6 @@ if ss.pending_prompt:
 
             render_latest_preview()
         else:
-            # Parse failed; keep as notes (raw text)
             ss.last_output_kind = "notes"
 
     # Clear template overrides
@@ -1356,3 +1471,88 @@ if ss.pending_prompt:
     ss.template_params = None
     ss.template_model = None
 
+
+# -------------------------
+# 2) Revision send (notes -> updated JSON)
+# -------------------------
+if ss.get("pending_revision"):
+    ss.pending_revision = False
+
+    if not ss.get("last_json_parsed") or ss.get("last_request_prompt") is None:
+        st.error("Cannot revise: missing last_json_parsed or last_request_prompt.")
+    else:
+        with st.chat_message("assistant"):
+            response_container = st.empty()
+
+            tpl_params = ss.template_params or {}
+
+            model = ss.template_model or ss.openai_model
+            temperature = tpl_params.get("temperature", ss.temperature)
+            top_p = tpl_params.get("top_p", ss.top_p)
+            presence_penalty = tpl_params.get("presence", ss.presence)
+            frequency_penalty = tpl_params.get("frequency", ss.frequency)
+
+            system_prompt = ss.template_system or (
+                "When you include math or chemistry formulas, ALWAYS wrap inline math in $...$ "
+                "and display equations in $$...$$. Never output bare LaTeX commands without delimiters."
+            )
+
+            api_messages = build_api_messages_for_revision(
+                system_prompt=system_prompt,
+                original_request=ss.last_request_prompt,
+                last_json_obj=ss.last_json_parsed,
+                revision_notes=ss.get("revision_notes", ""),
+            )
+
+            stream = client.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                top_p=top_p,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                messages=api_messages,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+
+            response = ""
+            for chunk in stream:
+                if hasattr(chunk, "choices") and chunk.choices:
+                    delta = chunk.choices[0].delta
+                    if hasattr(delta, "content") and delta.content:
+                        response += delta.content
+                        response_container.markdown(translate_latex(response))
+
+            response_container.markdown(translate_latex(response))
+
+        # Default: store raw response as notes
+        ss.last_response = response
+        ss.last_output_kind = "notes"
+
+        # Revisions should always be JSON; try parse
+        try:
+            parsed = json.loads(response)
+            ss.last_json_parsed = parsed
+            ss.last_response = parsed
+            ss.last_output_kind = "interactive"
+
+            try:
+                if isinstance(parsed, dict) and parsed.get("type") == "questions":
+                    validate_questions_schema(parsed)
+                    st.success("✅ Revised worksheet JSON generated (schema OK).")
+                else:
+                    st.success("✅ Revised JSON generated.")
+            except Exception as e:
+                st.warning(f"⚠️ Revised JSON parsed but schema invalid: {e}")
+                st.json(parsed)
+
+            render_latest_preview()
+
+        except Exception as e:
+            st.error(f"❌ Revised output was not valid JSON: {e}")
+            st.code(response)
+
+    # Clear template overrides (optional but keeps state consistent)
+    ss.template_system = None
+    ss.template_params = None
+    ss.template_model = None

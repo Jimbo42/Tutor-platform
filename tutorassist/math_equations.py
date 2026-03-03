@@ -1,0 +1,3 @@
+from solving_equations_practice import solving_equations_practice
+
+solving_equations_practice()

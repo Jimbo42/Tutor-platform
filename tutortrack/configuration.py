@@ -8,6 +8,7 @@ from datetime import datetime
 import hashlib
 
 from tutortrack.math_numeracy_admin import numeracy_admin_app
+from shared.sqlite_db import get_conn
 
 # ==============================
 # ChatTemplates Admin Functions
@@ -17,9 +18,6 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "AIDA.db"
 # short codes for lesson notes
 SHORTCODE_FILE = BASE_DIR / "shortcodes.json"
-
-def get_conn():
-    return sqlite3.connect(DB_PATH)
 
 def get_chattemplates_df():
     conn = get_conn()

@@ -9,12 +9,10 @@ import json
 from openai import Client
 from streamlit import session_state as ss
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "AIDA.db"
-SHORTCODE_FILE = BASE_DIR / "shortcodes.json"
+from shared.sqlite_db import get_conn
 
-def get_conn():
-    return sqlite3.connect(DB_PATH)
+BASE_DIR = Path(__file__).resolve().parent
+SHORTCODE_FILE = BASE_DIR / "shortcodes.json"
 
 def get_student_list():
     conn_l = get_conn()
