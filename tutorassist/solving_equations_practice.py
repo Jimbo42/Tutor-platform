@@ -540,31 +540,30 @@ def solving_equations_practice():
             st.rerun()
 
     # ----------------------------
-    # Flash correct
+    # Solved screen (no flashing)
     # ----------------------------
-    if q.get("flash_correct"):
+    if q.get("correct"):
         st.success("✅ Solved!")
 
         st.markdown("**Original:**")
         st.latex(sp.latex(q["start_lhs"]) + " = " + sp.latex(q["start_rhs"]))
 
-        # Final line only (e.g., j = 4)
-        st.latex(q.get("solved_line_latex", q.get("flash_final_latex", "")))
+        st.latex(q.get("solved_line_latex", ""))
 
-        time.sleep(2.2)
+        next_col = st.columns([3, 2, 3])[1]
+        with next_col:
+            if st.button("➡️ Next", key=f"eq_next_{idx}", width="stretch"):
+                # move on
+                if idx + 1 >= len(qs):
+                    ss.equations["finished"] = True
+                else:
+                    ss.equations["current"] += 1
 
-        # clear history so it never shows after solve
-        q["steps"] = []
-        q["last_message"] = ""
-        q["flash_correct"] = False
+                ss.eq_input_version += 1
+                st.rerun()
 
-        if idx + 1 >= len(qs):
-            ss.equations["finished"] = True
-        else:
-            ss.equations["current"] += 1
+        return  # IMPORTANT: stop rendering the rest of the UI
 
-        ss.eq_input_version += 1
-        st.rerun()
     # ----------------------------
     # Working Display
     # ----------------------------
@@ -713,13 +712,11 @@ def solving_equations_practice():
             val = solved_value_if_isolated(new_lhs, new_rhs)
             if val is not None and sp.simplify(val - q["target_sol"]) == 0:
                 q["correct"] = True
-                q["flash_correct"] = True
 
                 val_s = sp.simplify(val)
-                q["solved_line_latex"] = r"j = " + sp.latex(val_s)  # what you want to show
-                q["flash_final_latex"] = q["solved_line_latex"]  # keep your existing var too
+                q["solved_line_latex"] = r"j = " + sp.latex(val_s)
 
-                # hide/clear history so it won't display anywhere for this solved question
+                # hide/clear history so it won't display
                 q["steps"] = []
                 q["last_message"] = ""
 

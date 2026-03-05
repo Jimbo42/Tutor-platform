@@ -609,7 +609,7 @@ def show_published_manager():
             </div>
             """
 
-            left, right = st.columns([6, 2], vertical_alignment="center")
+            left, right = st.columns([4, 2], vertical_alignment="center")
             with left:
                 st.markdown(label_html, unsafe_allow_html=True)
                 # Quick links
@@ -620,7 +620,7 @@ def show_published_manager():
                 # actions
                 a1, a2, a3  = st.columns(3)
                 with a1:
-                    if st.button("👁 Preview", key=f"pm_prev_{i}", width="stretch"):
+                    if st.button("👁", key=f"pm_prev_{i}", width="stretch", help="Preview"):
                         item = row.to_dict()
                         ss.pm_preview_item = item
                         ss.pm_preview_obj = None
@@ -642,12 +642,12 @@ def show_published_manager():
                         open_preview_dialog()
 
                 with a2:
-                    if st.button("🗑 Delete", key=f"pm_del_{i}", width="stretch"):
+                    if st.button("🗑", key=f"pm_del_{i}", width="stretch", help="Delete"):
                         open_delete_dialog(row.to_dict())
 
                 with a3:
                     if ctype == "interactive":
-                        if st.button("✏️ Edit", key=f"pm_edit_{i}", width="stretch"):
+                        if st.button("✏️", key=f"pm_edit_{i}", width="stretch", help="Edit"):
                             open_edit_interactive_json_dialog(row.to_dict())
 
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)

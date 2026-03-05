@@ -8,11 +8,19 @@ import re
 
 from shared.formulas import show_formulas
 from published_manager import show_published_manager
-from shared.sqlite_db import get_conn
+#from shared.sqlite_db import get_conn
 
 _DRIVE_FILE_ID = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 _DRIVE_UC_ID   = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
 _DRIVE_OPEN_ID = re.compile(r"/open\?id=([a-zA-Z0-9_-]+)")
+
+BASE_DIR = Path(__file__).resolve().parent
+SHORTCODE_FILE = BASE_DIR / "shortcodes.json"
+DB_PATH = BASE_DIR / "AIDA.db"
+
+def get_conn():
+    return sqlite3.connect(DB_PATH)
+
 
 def extract_gdrive_file_id(url_or_id: str) -> str | None:
     if not url_or_id:
