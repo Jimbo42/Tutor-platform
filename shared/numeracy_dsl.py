@@ -66,6 +66,7 @@ def _eval_expr(expr: Any, env: Dict[str, Any], limits: Dict[str, Any]) -> Any:
         if op == "sub": return v[0] - v[1]
         if op == "mul": return v[0] * v[1]
         if op == "div": return v[0] / v[1]
+        if op == "pow": return v[0] ** v[1]
         if op == "round": return round(float(v[0]), int(v[1]))
         if op == "gcd":
             if len(v) != 2:

@@ -16,6 +16,7 @@
       "sub",
       "mul",
       "div",
+      "pow",
       "round",
       "gcd"
     ],
@@ -734,17 +735,468 @@
       },
       "explain": "The gcd of {{expr:$a}} and {{expr:$b}} is {{expr:$g}}. ",
       "difficulty": "Intermediate"
+    },
+    {
+      "id": "q_3d451102",
+      "title": "Square of an Integer",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "n": {
+          "kind": "int",
+          "min": 3,
+          "max": 25
+        },
+        "d_plus": {
+          "kind": "int",
+          "min": 1,
+          "max": 4
+        },
+        "d_minus": {
+          "kind": "int",
+          "min": 1,
+          "max": 2
+        }
+      },
+      "derived": {
+        "correct_sq": {
+          "op": "pow",
+          "args": [
+            "$n",
+            2
+          ]
+        },
+        "plus_base": {
+          "op": "add",
+          "args": [
+            "$n",
+            "$d_plus"
+          ]
+        },
+        "minus_base": {
+          "op": "sub",
+          "args": [
+            "$n",
+            "$d_minus"
+          ]
+        },
+        "wrong_hi_sq": {
+          "op": "pow",
+          "args": [
+            "$plus_base",
+            2
+          ]
+        },
+        "wrong_lo_sq": {
+          "op": "pow",
+          "args": [
+            "$minus_base",
+            2
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "gt",
+          "args": [
+            "$minus_base",
+            1
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$correct_sq",
+            "$wrong_hi_sq"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$correct_sq",
+            "$wrong_lo_sq"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$wrong_hi_sq",
+            "$wrong_lo_sq"
+          ]
+        }
+      ],
+      "prompt": "What is the square of {{expr:$n}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct_sq}}",
+            "value": "$correct_sq"
+          },
+          {
+            "label": "{{expr:$wrong_hi_sq}}",
+            "value": "$wrong_hi_sq"
+          },
+          {
+            "label": "{{expr:$wrong_lo_sq}}",
+            "value": "$wrong_lo_sq"
+          }
+        ],
+        "label_places": 0,
+        "exact": "$correct_sq"
+      },
+      "answer": {
+        "mode": "choice_is_exact",
+        "display_places": 0
+      },
+      "explain": "{{expr:$n}}^2 = {{expr:$correct_sq}}",
+      "difficulty": "Starter"
+    },
+    {
+      "id": "q_7f2e8c91",
+      "title": "Square Root of a Perfect Square",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "root": {
+          "kind": "int",
+          "min": 3,
+          "max": 20
+        },
+        "d_plus": {
+          "kind": "int",
+          "min": 1,
+          "max": 3
+        },
+        "d_minus": {
+          "kind": "int",
+          "min": 1,
+          "max": 2
+        }
+      },
+      "derived": {
+        "square_val": {
+          "op": "pow",
+          "args": [
+            "$root",
+            2
+          ]
+        },
+        "wrong_hi": {
+          "op": "add",
+          "args": [
+            "$root",
+            "$d_plus"
+          ]
+        },
+        "wrong_lo": {
+          "op": "sub",
+          "args": [
+            "$root",
+            "$d_minus"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "gt",
+          "args": [
+            "$wrong_lo",
+            1
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$root",
+            "$wrong_hi"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$root",
+            "$wrong_lo"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$wrong_hi",
+            "$wrong_lo"
+          ]
+        }
+      ],
+      "prompt": "What is the square root of {{expr:$square_val}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$root}}",
+            "value": "$root"
+          },
+          {
+            "label": "{{expr:$wrong_hi}}",
+            "value": "$wrong_hi"
+          },
+          {
+            "label": "{{expr:$wrong_lo}}",
+            "value": "$wrong_lo"
+          }
+        ],
+        "label_places": 0,
+        "exact": "$root"
+      },
+      "answer": {
+        "mode": "choice_is_exact",
+        "display_places": 0
+      },
+      "explain": "The square root of {{expr:$square_val}} is {{expr:$root}}.",
+      "difficulty": "Intermediate"
+    },
+    {
+      "id": "q_5ac09d44",
+      "title": "Cube of an Integer",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "n": {
+          "kind": "int",
+          "min": 3,
+          "max": 12
+        },
+        "d_plus": {
+          "kind": "int",
+          "min": 1,
+          "max": 2
+        },
+        "d_minus": {
+          "kind": "int",
+          "min": 1,
+          "max": 2
+        }
+      },
+      "derived": {
+        "correct_cube": {
+          "op": "pow",
+          "args": [
+            "$n",
+            3
+          ]
+        },
+        "plus_base": {
+          "op": "add",
+          "args": [
+            "$n",
+            "$d_plus"
+          ]
+        },
+        "minus_base": {
+          "op": "sub",
+          "args": [
+            "$n",
+            "$d_minus"
+          ]
+        },
+        "wrong_hi_cube": {
+          "op": "pow",
+          "args": [
+            "$plus_base",
+            3
+          ]
+        },
+        "wrong_lo_cube": {
+          "op": "pow",
+          "args": [
+            "$minus_base",
+            3
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "gt",
+          "args": [
+            "$minus_base",
+            1
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$correct_cube",
+            "$wrong_hi_cube"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$correct_cube",
+            "$wrong_lo_cube"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$wrong_hi_cube",
+            "$wrong_lo_cube"
+          ]
+        }
+      ],
+      "prompt": "What is the cube of {{expr:$n}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct_cube}}",
+            "value": "$correct_cube"
+          },
+          {
+            "label": "{{expr:$wrong_hi_cube}}",
+            "value": "$wrong_hi_cube"
+          },
+          {
+            "label": "{{expr:$wrong_lo_cube}}",
+            "value": "$wrong_lo_cube"
+          }
+        ],
+        "label_places": 0,
+        "exact": "$correct_cube"
+      },
+      "answer": {
+        "mode": "choice_is_exact",
+        "display_places": 0
+      },
+      "explain": "{{expr:$n}}^3 = {{expr:$correct_cube}}",
+      "difficulty": "Intermediate"
+    },
+    {
+      "id": "q_81be2f0a",
+      "title": "Cube Root of a Perfect Cube",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "root": {
+          "kind": "int",
+          "min": 2,
+          "max": 10
+        },
+        "d_plus": {
+          "kind": "int",
+          "min": 1,
+          "max": 2
+        },
+        "d_minus": {
+          "kind": "int",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "derived": {
+        "cube_val": {
+          "op": "pow",
+          "args": [
+            "$root",
+            3
+          ]
+        },
+        "wrong_hi": {
+          "op": "add",
+          "args": [
+            "$root",
+            "$d_plus"
+          ]
+        },
+        "wrong_lo": {
+          "op": "sub",
+          "args": [
+            "$root",
+            "$d_minus"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "gt",
+          "args": [
+            "$wrong_lo",
+            0
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$root",
+            "$wrong_hi"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$root",
+            "$wrong_lo"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$wrong_hi",
+            "$wrong_lo"
+          ]
+        }
+      ],
+      "prompt": "What is the cube root of {{expr:$cube_val}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$root}}",
+            "value": "$root"
+          },
+          {
+            "label": "{{expr:$wrong_hi}}",
+            "value": "$wrong_hi"
+          },
+          {
+            "label": "{{expr:$wrong_lo}}",
+            "value": "$wrong_lo"
+          }
+        ],
+        "label_places": 0,
+        "exact": "$root"
+      },
+      "answer": {
+        "mode": "choice_is_exact",
+        "display_places": 0
+      },
+      "explain": "The cube root of {{expr:$cube_val}} is {{expr:$root}}.",
+      "difficulty": "Challenging"
     }
   ],
   "_all_var_names": [
-    "num_1",
-    "frac_2",
-    "frac_1",
-    "denom_2",
-    "num_2",
-    "frac_3",
-    "denom_1",
-    "num_3",
-    "denom_3"
+    "wrong_hi_sq",
+    "d_plus",
+    "minus_base",
+    "plus_base",
+    "correct_sq",
+    "d_minus",
+    "wrong_lo_sq",
+    "n"
   ]
 }
