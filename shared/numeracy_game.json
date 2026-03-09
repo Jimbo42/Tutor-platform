@@ -16,7 +16,8 @@
       "sub",
       "mul",
       "div",
-      "round"
+      "round",
+      "gcd"
     ],
     "logic_ops": [
       "gt",
@@ -37,7 +38,7 @@
       "title": "Which sum is larger?",
       "enabled": true,
       "selection": {
-        "weight": 5,
+        "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
       },
@@ -98,14 +99,16 @@
         "field": "value",
         "tie_break": "random"
       },
-      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}"
+      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}",
+      "constraints": [],
+      "difficulty": "Starter"
     },
     {
       "id": "q_9f3d2a2c",
       "title": "Which product is smaller?",
       "enabled": true,
       "selection": {
-        "weight": 4,
+        "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
       },
@@ -166,29 +169,31 @@
         "field": "value",
         "tie_break": "random"
       },
-      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}"
+      "explain": "{{choice:0.label}} = {{choice:0.value}} ; {{choice:1.label}} = {{choice:1.value}}",
+      "constraints": [],
+      "difficulty": "Starter"
     },
     {
       "id": "q_2g3c2a4c",
       "title": "Fraction to decimal - 2 choices",
       "enabled": true,
       "selection": {
-        "weight": 3.0,
-        "cooldown": 0,
+        "weight": 1.0,
+        "cooldown": 1,
         "max_per_round": 999
       },
       "vars": {
         "denom": {
           "kind": "choice",
           "values": [
-            4,
-            5,
-            8,
-            10,
-            16,
-            20,
-            25,
-            40
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            10.0,
+            12.0
           ]
         },
         "num": {
@@ -235,16 +240,18 @@
         "clamp_01": true
       },
       "answer": {
-        "mode": "choice_is_exact"
+        "mode": "choice_is_exact",
+        "display_places": 3
       },
-      "explain": "{{expr:$num}}/{{expr:$denom}} = {{fmt:$exact,3}}"
+      "explain": "{{expr:$num}}/{{expr:$denom}} = {{expr:$exact}}",
+      "difficulty": "Starter"
     },
     {
       "id": "q_6a3c16f4",
       "title": "Which quotient is larger?",
       "enabled": true,
       "selection": {
-        "weight": 4.0,
+        "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
       },
@@ -328,15 +335,16 @@
             "$right_val"
           ]
         }
-      ]
+      ],
+      "difficulty": "Starter"
     },
     {
       "id": "q_0c1519ed",
       "title": "Fraction to decimal -  3 choices",
       "enabled": true,
       "selection": {
-        "weight": 3.0,
-        "cooldown": 0,
+        "weight": 1.0,
+        "cooldown": 1,
         "max_per_round": 999
       },
       "vars": {
@@ -397,9 +405,11 @@
         "clamp_01": true
       },
       "answer": {
-        "mode": "choice_is_exact"
+        "mode": "choice_is_exact",
+        "display_places": 3
       },
-      "explain": "{{expr:$num}}/{{expr:$denom}} = {{fmt:$exact,3}}"
+      "explain": "{{expr:$num}}/{{expr:$denom}} = {{expr:$exact}}",
+      "difficulty": "Intermediate"
     },
     {
       "id": "q_7eb949f3",
@@ -407,7 +417,7 @@
       "enabled": true,
       "selection": {
         "weight": 1.0,
-        "cooldown": 0,
+        "cooldown": 1,
         "max_per_round": 999
       },
       "vars": {
@@ -509,9 +519,11 @@
       "answer": {
         "mode": "argmax",
         "field": "value",
-        "tie_break": "random"
+        "tie_break": "random",
+        "display_places": 3
       },
-      "explain": ""
+      "explain": "",
+      "difficulty": "Starter"
     },
     {
       "id": "q_a9411fb3",
@@ -519,7 +531,7 @@
       "enabled": true,
       "selection": {
         "weight": 1.0,
-        "cooldown": 0,
+        "cooldown": 1,
         "max_per_round": 999
       },
       "vars": {
@@ -540,8 +552,8 @@
         },
         "denom_1": {
           "kind": "int",
-          "min": 3,
-          "max": 16
+          "min": 4,
+          "max": 24
         },
         "denom_2": {
           "kind": "int",
@@ -621,20 +633,118 @@
       "answer": {
         "mode": "argmin",
         "field": "value",
-        "tie_break": "random"
+        "tie_break": "random",
+        "display_places": 3
       },
-      "explain": ""
+      "explain": "",
+      "difficulty": "Intermediate"
+    },
+    {
+      "id": "q_2666cb57",
+      "title": "Greatest Common Divisor",
+      "enabled": true,
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 12,
+          "max": 96
+        },
+        "b": {
+          "kind": "int",
+          "min": 12,
+          "max": 96
+        },
+        "r": {
+          "kind": "int",
+          "min": 2,
+          "max": 5
+        }
+      },
+      "derived": {
+        "g": {
+          "op": "gcd",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "f": {
+          "op": "mul",
+          "args": [
+            "$g",
+            "$r"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "ne",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        {
+          "op": "gt",
+          "args": [
+            "$g",
+            1
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$f",
+            "$g"
+          ]
+        }
+      ],
+      "prompt": "What is the greatest common divisor of {{expr:$a}} and {{expr:$b}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$g}}",
+            "value": "$g"
+          },
+          {
+            "label": "1",
+            "value": "1"
+          },
+          {
+            "label": "{{expr:$r}}",
+            "value": "$r"
+          },
+          {
+            "label": "{{expr:$a}}",
+            "value": "$a"
+          }
+        ],
+        "label_places": 0,
+        "exact": "$g"
+      },
+      "answer": {
+        "mode": "choice_is_exact",
+        "display_places": 0
+      },
+      "explain": "The gcd of {{expr:$a}} and {{expr:$b}} is {{expr:$g}}. ",
+      "difficulty": "Intermediate"
     }
   ],
   "_all_var_names": [
     "num_1",
-    "denom_1",
-    "num_2",
-    "denom_2",
     "frac_2",
+    "frac_1",
+    "denom_2",
+    "num_2",
     "frac_3",
-    "denom_3",
+    "denom_1",
     "num_3",
-    "frac_1"
+    "denom_3"
   ]
 }

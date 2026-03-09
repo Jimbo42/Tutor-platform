@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,10 @@ def _eval_expr(expr: Any, env: Dict[str, Any], limits: Dict[str, Any]) -> Any:
         if op == "mul": return v[0] * v[1]
         if op == "div": return v[0] / v[1]
         if op == "round": return round(float(v[0]), int(v[1]))
+        if op == "gcd":
+            if len(v) != 2:
+                raise ValueError("gcd requires exactly 2 arguments")
+            return math.gcd(int(v[0]), int(v[1]))
         raise ValueError(f"Unhandled math op: {op}")
 
     if op == "ne":
@@ -106,45 +111,64 @@ def _sample_var(spec: Dict[str, Any]) -> Any:
 
 TOK = re.compile(r"\{\{(.*?)\}\}")
 
-def _fmt_num(x: float, places: int) -> str:
-    y = round(float(x), places)
-    s = f"{y:.{places}f}"
-    s = s.rstrip("0").rstrip(".") if "." in s else s
-    return s
+# def _fmt_num(x: float, places: int) -> str:
+#     y = round(float(x), places)
+#     s = f"{y:.{places}f}"
+#     s = s.rstrip("0").rstrip(".") if "." in s else s
+#     return s
 
-def _render(template: str, env: Dict[str, Any], choices: Optional[List[Dict[str, Any]]] = None) -> str:
+def _fmt_num(val, places):
+    places = int(places)
+    if places <= 0:
+        return str(int(round(float(val))))
+    return f"{float(val):.{places}f}"
+
+def _render(
+    template: str,
+    env: Dict[str, Any],
+    choices: Optional[List[Dict[str, Any]]] = None,
+    *,
+    expr_places: Optional[int] = None,
+    choice_value_places: Optional[int] = None,
+) -> str:
+    def _maybe_fmt(val: Any, places: Optional[int]) -> str:
+        if isinstance(val, bool):
+            return str(val)
+        if places is not None and isinstance(val, (int, float)):
+            return _fmt_num(val, int(places))
+        return str(val)
+
     def repl(m):
         inner = m.group(1).strip()
 
-        # {{expr:$a}}
         if inner.startswith("expr:"):
             ref = inner[len("expr:"):].strip()
             val = _resolve(ref, env)
+            text = _maybe_fmt(val, expr_places)
             if isinstance(val, (int, float)) and val < 0:
-                return f"({val})"
-            return str(val)
+                return f"({text})"
+            return text
 
-        # {{fmt:$exact,3}}
         if inner.startswith("fmt:"):
             rest = inner[len("fmt:"):].strip()
-            # fmt:<ref>,<places>
             ref, places = [x.strip() for x in rest.split(",")]
             val = _resolve(ref, env)
             return _fmt_num(val, int(places))
 
-        # {{choice:0.label}} / {{choice:1.value}}
         if inner.startswith("choice:"):
             if choices is None:
                 raise ValueError("choice:* token used but choices not provided")
             rest = inner[len("choice:"):].strip()
             idx_s, field = rest.split(".", 1)
             idx = int(idx_s)
-            return str(choices[idx][field])
+            val = choices[idx][field]
+            if field == "value":
+                return _maybe_fmt(val, choice_value_places)
+            return str(val)
 
         raise ValueError(f"Unsupported token: {inner}")
 
     return TOK.sub(repl, template)
-
 
 # ----------------------------
 # Choice builders (generic primitives)
@@ -155,9 +179,19 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
 
     if mode == "computed_items":
         out = []
+        label_places = spec.get("label_places", None)
+
         for it in spec["items"]:
-            label = _render(it["label"], env)
-            value = _resolve(it["value"], env) if not isinstance(it["value"], dict) else _eval_expr(it["value"], env, limits)
+            label = _render(
+                it["label"],
+                env,
+                expr_places=label_places,
+            )
+            value = (
+                _resolve(it["value"], env)
+                if not isinstance(it["value"], dict)
+                else _eval_expr(it["value"], env, limits)
+            )
             out.append({"label": label, "value": value})
         return out
 
@@ -167,17 +201,13 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
         places = int(spec.get("round_places", 3))
         n_distractors = int(spec.get("n_distractors", 1))
 
-        # Backwards-compatible clamp (your previous behavior)
         clamp_01 = bool(spec.get("clamp_01", True))
 
         exact_s = _fmt_num(exact, places)
 
-        # Always include the exact answer
         out = [{"label": exact_s, "value": float(exact_s)}]
         seen = {exact_s}
 
-        # Generate up to n_distractors distinct distractors AFTER rounding.
-        # Use ±k*delta so we can get more than one distractor deterministically.
         k = 1
         guard = 0
         while len(out) < 1 + n_distractors and guard < 200:
@@ -190,12 +220,10 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
 
             cand_s = _fmt_num(cand, places)
 
-            # Avoid duplicates caused by rounding or delta=0
             if cand_s not in seen:
                 out.append({"label": cand_s, "value": float(cand_s)})
                 seen.add(cand_s)
 
-            # Increase k occasionally; helps when rounding collapses nearby values
             if guard % 2 == 0:
                 k += 1
 
@@ -204,12 +232,15 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
 
     raise ValueError(f"Unknown choices mode: {mode}")
 
-
 # ----------------------------
 # Answer rules (generic primitives)
 # ----------------------------
 
-def _pick_correct_index(answer_spec: Dict[str, Any], choices: List[Dict[str, Any]]) -> int:
+def _pick_correct_index(
+    answer_spec: Dict[str, Any],
+    choices: List[Dict[str, Any]],
+    env: Optional[Dict[str, Any]] = None,
+) -> int:
     mode = answer_spec.get("mode")
 
     if mode == "argmax":
@@ -225,34 +256,38 @@ def _pick_correct_index(answer_spec: Dict[str, Any], choices: List[Dict[str, Any
         return random.choice(idxs) if answer_spec.get("tie_break") == "random" else idxs[0]
 
     if mode == "choice_is_exact":
-        # assumes choices include one that is the exact value AND label is formatted exact
-        # pick the one with the smaller absolute error vs the env-provided exact if you want,
-        # but for this mode we just mark the one whose label equals the exact formatted label.
-        # Here we rely on the builder placing exact into choices.
-        # We pick the one with value closest to the minimum of the two? Not safe.
-        # So: treat first item as exact before shuffle is not available now.
-        # Instead: compare the two, exact must equal the min error vs itself: exact value is stored in env? no.
-        # For this mode, we mark the correct as the one whose label matches the formatted exact produced
-        # by re-evaluating exact from env is not passed here; so we instead store a flag in choice builder if needed.
-        # We'll do it simply: the builder puts exact as one of the two; we detect it because it has the "exact" numeric
-        # when both are rounded and distinct: pick the one with the smaller denominator? not possible.
-        # Solution: choice builder will attach "is_exact" when mode == two_decimal_one_distractor.
-        for i, ch in enumerate(choices):
-            if ch.get("is_exact", False):
-                return i
-        # fallback: first
-        return 0
+        # Preferred path: explicit exact-tag on the choice
+        idxs = [i for i, ch in enumerate(choices) if ch.get("is_exact")]
+        if idxs:
+            return idxs[0]
+
+        # Fallback path: compare against an env-driven exact value
+        if env is not None and "exact" in answer_spec:
+            target = _resolve(answer_spec["exact"], env)
+            idxs = [i for i, ch in enumerate(choices) if ch.get("value") == target]
+            if idxs:
+                return idxs[0]
+
+        raise ValueError("choice_is_exact requires an exact-marked choice or answer.exact")
 
     raise ValueError(f"Unknown answer mode: {mode}")
-
 
 # ----------------------------
 # Selection engine (weight/cooldown/max-per-round)
 # ----------------------------
 
-def pick_question_def(game: Dict[str, Any], history: List[str], used_counts: Dict[str, int]) -> Dict[str, Any]:
+def pick_question_def(
+    game: Dict[str, Any],
+    history: List[str],
+    used_counts: Dict[str, int],
+    difficulty: Optional[str] = None,
+) -> Dict[str, Any]:
     qdefs = [q for q in game.get("questions", []) if q.get("enabled", True)]
+    if difficulty:
+        qdefs = [q for q in qdefs if str(q.get("difficulty", "Starter")) == str(difficulty)]
     if not qdefs:
+        if difficulty:
+            raise ValueError(f"No enabled questions for difficulty '{difficulty}' in numeracy_game.json")
         raise ValueError("No enabled questions in numeracy_game.json")
 
     cooldown_default = int(game.get("selection", {}).get("cooldown_default", 0))
@@ -370,23 +405,49 @@ def build_question(game: Dict[str, Any], qdef: Dict[str, Any], max_resamples: in
         choices = _build_choices(qdef["choices"], env, limits)
 
         # mark exact choice if needed (for choice_is_exact)
-        if qdef.get("choices", {}).get("mode") == "two_decimal_one_distractor":
-            exact = float(_resolve(qdef["choices"]["exact"], env))
-            places = int(qdef["choices"].get("round_places", 3))
+        choice_spec = qdef.get("choices", {})
+        choice_mode = choice_spec.get("mode")
+
+        if choice_mode == "two_decimal_one_distractor":
+            exact = float(_resolve(choice_spec["exact"], env))
+            places = int(choice_spec.get("round_places", 3))
             exact_s = _fmt_num(exact, places)
             for ch in choices:
                 ch["is_exact"] = (ch["label"] == exact_s)
+
+        elif choice_mode == "computed_items" and "exact" in choice_spec:
+            exact = _resolve(choice_spec["exact"], env)
+            for ch in choices:
+                ch["is_exact"] = (ch.get("value") == exact)
 
         # shuffle if configured
         if bool(game.get("rules", {}).get("shuffle_choices", True)):
             random.shuffle(choices)
 
         # correct index
-        correct_index = _pick_correct_index(qdef["answer"], choices)
+        answer_spec = dict(qdef["answer"])
+
+        if answer_spec.get("mode") == "choice_is_exact" and "exact" not in answer_spec:
+            choice_spec = qdef.get("choices", {})
+            if "exact" in choice_spec:
+                answer_spec["exact"] = choice_spec["exact"]
+
+        correct_index = _pick_correct_index(answer_spec, choices, env)
 
         # explain
         explain_t = qdef.get("explain", "")
-        explain = _render(explain_t, env, choices) if explain_t else ""
+        answer_places = qdef.get("answer", {}).get("display_places", None)
+
+        explain = (
+            _render(
+                explain_t,
+                env,
+                choices,
+                expr_places=answer_places,
+                choice_value_places=answer_places,
+            )
+            if explain_t else ""
+        )
 
         return BuiltQuestion(
             qid=qdef["id"],

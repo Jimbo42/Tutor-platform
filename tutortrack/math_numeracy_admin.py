@@ -18,6 +18,7 @@ GAME_PATH = PROJECT_ROOT / "shared" / "numeracy_game.json"
 SUPPORTED_CHOICE_MODES = ["computed_items", "two_decimal_one_distractor"]
 SUPPORTED_ANSWER_MODES = ["argmax", "argmin", "choice_is_exact"]
 SUPPORTED_VAR_KINDS = ["int", "choice"]
+SUPPORTED_DIFFICULTIES = ["Starter", "Intermediate", "Challenging"]
 
 def _new_qid() -> str:
     return "q_" + secrets.token_hex(4)  # 8 hex chars
@@ -31,10 +32,21 @@ def _ensure_titles(game: dict) -> bool:
             changed = True
     return changed
 
+def _ensure_difficulties(game: dict) -> bool:
+    """One-time migration: add difficulty if missing/invalid. Returns True if changed."""
+    changed = False
+    for q in game.get("questions", []):
+        cur = str(q.get("difficulty", "")).strip()
+        if cur not in SUPPORTED_DIFFICULTIES:
+            q["difficulty"] = "Starter"
+            changed = True
+    return changed
+
 def _default_qdef(qid: str) -> dict:
     return {
         "id": qid,
         "title": "Untitled question",
+        "difficulty": "Starter",
         "enabled": True,
         "selection": {"weight": 1, "cooldown": 0, "max_per_round": 999},
         "vars": {},
@@ -201,6 +213,7 @@ def dlg_edit_question(game: dict, qdef: dict):
 
     # Ensure required keys exist
     qdef.setdefault("title", "Untitled question")
+    qdef.setdefault("difficulty", "Starter")
     qdef.setdefault("enabled", True)
     qdef.setdefault("selection", {"weight": 1, "cooldown": 0, "max_per_round": 999})
     qdef.setdefault("vars", {})
@@ -219,6 +232,13 @@ def dlg_edit_question(game: dict, qdef: dict):
     # ---------------- BASICS ----------------
     with tabs[0]:
         qdef["title"] = st.text_input("Title", qdef["title"], key=f"{ns}_title")
+        qdef["difficulty"] = st.selectbox(
+            "Difficulty",
+            SUPPORTED_DIFFICULTIES,
+            index=SUPPORTED_DIFFICULTIES.index(qdef.get("difficulty", "Starter"))
+            if qdef.get("difficulty", "Starter") in SUPPORTED_DIFFICULTIES else 0,
+            key=f"{ns}_difficulty",
+        )
         qdef["enabled"] = st.checkbox("Enabled", qdef["enabled"], key=f"{ns}_enabled")
 
         sel = qdef["selection"]
@@ -462,6 +482,36 @@ def dlg_edit_question(game: dict, qdef: dict):
         if mode == "computed_items":
             items = ch.get("items", []) or []
 
+            label_places_enabled = st.checkbox(
+                "Format decimal values in choice labels",
+                value=("label_places" in ch),
+                key=f"{ns}_c_label_places_enabled",
+            )
+
+            label_places = None
+            if label_places_enabled:
+                label_places = int(
+                    st.number_input(
+                        "Choice label decimal places",
+                        0, 6,
+                        int(ch.get("label_places", 3)),
+                        1,
+                        key=f"{ns}_c_label_places",
+                    )
+                )
+
+            answer_mode_now = (qdef.get("answer") or {}).get("mode", "argmax")
+
+            exact_ref = ""
+            if answer_mode_now == "choice_is_exact":
+                exact_ref = st.selectbox(
+                    "Exact correct value ($ref)",
+                    ref_options,
+                    index=ref_options.index(ch.get("exact", "")) if ch.get("exact", "") in ref_options else 0,
+                    key=f"{ns}_c_exact_ref",
+                    help="Required for computed_items when answer.mode = choice_is_exact",
+                )
+
             # -------- Presets --------
             with st.expander("✨ Presets", expanded=True):
                 # Detect frac_1, frac_2, ... pattern
@@ -541,14 +591,26 @@ def dlg_edit_question(game: dict, qdef: dict):
                 _dirty()
                 st.rerun()
 
-            qdef["choices"] = {"mode": "computed_items", "items": items}
+            new_choices = {"mode": "computed_items", "items": items}
+            if label_places_enabled:
+                new_choices["label_places"] = int(label_places)
+
+            if answer_mode_now == "choice_is_exact" and exact_ref:
+                new_choices["exact"] = exact_ref.strip()
+
+            qdef["choices"] = new_choices
 
         else:
             # keep your existing two_decimal_one_distractor UI (with n_distractors)
             exact = st.text_input("exact ($ref)", value=ch.get("exact", "$exact"), key=f"{ns}_c_exact")
             delta = st.text_input("delta ($ref)", value=ch.get("delta", "$delta"), key=f"{ns}_c_delta")
-            places = st.number_input("round_places", 0, 6, int(ch.get("round_places", 3)), 1, key=f"{ns}_c_places")
-
+            places = st.number_input(
+                "Choice decimal places (round_places)",
+                0, 6,
+                int(ch.get("round_places", 3)),
+                1,
+                key=f"{ns}_c_places"
+            )
             n_dist = st.number_input(
                 "Number of distractors",
                 1, 6,
@@ -578,6 +640,23 @@ def dlg_edit_question(game: dict, qdef: dict):
             index=SUPPORTED_ANSWER_MODES.index(ans.get("mode", "argmax")),
             key=f"{ns}_a_mode",
         )
+        display_places_enabled = st.checkbox(
+            "Format decimals on answer / explain screen",
+            value=("display_places" in ans),
+            key=f"{ns}_a_disp_enabled",
+        )
+
+        display_places = None
+        if display_places_enabled:
+            display_places = int(
+                st.number_input(
+                    "Answer / explain decimal places",
+                    0, 6,
+                    int(ans.get("display_places", 3)),
+                    1,
+                    key=f"{ns}_a_disp_places",
+                )
+            )
 
         if mode in ("argmax", "argmin"):
             tie = st.selectbox(
@@ -586,11 +665,16 @@ def dlg_edit_question(game: dict, qdef: dict):
                 index=0 if ans.get("tie_break", "random") == "random" else 1,
                 key=f"{ns}_a_tie",
             )
-            qdef["answer"] = {"mode": mode, "field": "value", "tie_break": tie}
+            new_answer = {"mode": mode, "field": "value", "tie_break": tie}
         else:
-            qdef["answer"] = {"mode": "choice_is_exact"}
+            new_answer = {"mode": "choice_is_exact"}
 
-    # ---------------- CONTRAINTS ----------------
+        if display_places_enabled:
+            new_answer["display_places"] = int(display_places)
+
+        qdef["answer"] = new_answer
+
+    # ---------------- CONSTRAINTS ----------------
     with tabs[5]:
         st.caption("Constraints must evaluate True. Use comparisons or AND/OR groups. No nested dialogs.")
 
@@ -955,7 +1039,12 @@ def numeracy_admin_app():
         ss.nr_preview_open = False
 
         # one-time migration
+        changed = False
         if _ensure_titles(ss.nr_game):
+            changed = True
+        if _ensure_difficulties(ss.nr_game):
+            changed = True
+        if changed:
             save_game(GAME_PATH, ss.nr_game)
 
     game = ss.nr_game
@@ -988,7 +1077,7 @@ def numeracy_admin_app():
             left, right = st.columns([4, 2], vertical_alignment="center")
             with left:
                 st.markdown(f"**{title}**")
-                st.caption(f"id: {qid}")
+                st.caption(f"id: {qid}  •  difficulty: {q.get('difficulty', 'Starter')}")
 
             with right:
                 c1, c2, c3, c4 = st.columns(4)

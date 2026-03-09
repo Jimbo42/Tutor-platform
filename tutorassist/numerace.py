@@ -23,6 +23,7 @@ SEGMENTS_PER_ROUND = 8
 ROUND_SECONDS_DEFAULT = 90          # total time to finish 8 correct answers
 QUESTION_SECONDS_DEFAULT = 10        # time per question
 FEEDBACK_SECONDS_DEFAULT = 3.5      # paused feedback display time (excluded from round timer)
+DIFFICULTY_LEVELS = ["Starter", "Intermediate", "Challenging"]
 
 AUTOREFRESH_ANSWER_MS = 1000   # slow: avoids click-eating
 AUTOREFRESH_FEEDBACK_MS = 250  # fast: snappy auto-advance
@@ -64,6 +65,8 @@ def ss_init():
     # optional: stats
     ss.nr_attempts_total = 0
     ss.nr_correct_total = 0
+    ss.nr_difficulty = "Starter"
+    ss.nr_start_error = None
 
     # Round breakdown
     ss.nr_incorrect_in_round = 0
@@ -112,14 +115,13 @@ def render_solid_track(correct: int, segments: int, q_seconds_left: float, q_sec
     prog = clamp01(correct_i / segs)
     pct = int(round(prog * 100))
 
-    # keep racer visible inside ends (translateX(-50%) + edges)
+    # keep racer visible inside ends
     racer_pct = max(4, min(96, pct))
 
     finished = correct_i >= segs
     racer = "🏎️💨" if finished else "🏎️"
     extra = "nr-racer-finish" if finished else ""
 
-    # force DOM change so finish animation can re-trigger
     burst = f"burst-{ss.get('nr_round_id', 0)}-{correct_i}"
 
     html = (
@@ -147,43 +149,33 @@ def render_solid_track(correct: int, segments: int, q_seconds_left: float, q_sec
     st.markdown(f"<div class='{cls}'>{secs}</div>", unsafe_allow_html=True)
 
 def render_circular_timer(label: str, seconds_left: float, seconds_total: float, key: str):
-    """
-    Renders a circular progress ring using inline SVG.
-    - seconds_left can be float
-    - seconds_total must be > 0
-    """
     total = max(1e-9, float(seconds_total))
     left = max(0.0, float(seconds_left))
     frac_left = clamp01(left / total)
 
-    # ring geometry
     r = 18
     c = 2 * 3.141592653589793 * r
-    prog = frac_left  # show "time remaining" as filled arc
-    dash = prog * c
+    dash = frac_left * c
     gap = c - dash
 
     col = timer_color(frac_left)
-
-    # show whole seconds
     txt = str(int(round(left)))
 
-    st.markdown(
-        f"""
-        <div class="nr-ring" id="{key}">
-          <svg viewBox="0 0 50 50" class="nr-ring-svg" aria-label="{label}">
-            <circle class="nr-ring-bg" cx="25" cy="25" r="{r}"></circle>
-            <circle class="nr-ring-fg" cx="25" cy="25" r="{r}"
-              stroke="{col}"
-              stroke-dasharray="{dash} {gap}">
-            </circle>
-            <text x="25" y="28" text-anchor="middle" class="nr-ring-text">{txt}</text>
-          </svg>
-          <div class="nr-ring-label">{label}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
+    html = (
+        f'<div class="nr-ring" id="{key}">'
+        f'<svg viewBox="0 0 50 50" class="nr-ring-svg">'
+        f'<circle class="nr-ring-bg" cx="25" cy="25" r="{r}"></circle>'
+        f'<circle class="nr-ring-fg" cx="25" cy="25" r="{r}" stroke="{col}" stroke-dasharray="{dash} {gap}"></circle>'
+
+        f'<g transform="rotate(90 25 25)">'
+        f'<text x="25" y="18" text-anchor="middle" class="nr-ring-inner-label">{label}</text>'
+        f'<text x="25" y="32" text-anchor="middle" class="nr-ring-text">{txt}</text>'
+        f'</g>'
+
+        f'</svg></div>'
     )
+
+    st.markdown(html, unsafe_allow_html=True)
 
 def suppress_autorefresh(seconds: float = 0.5):
     ss.nr_no_refresh_until = time.time() + seconds
@@ -191,6 +183,7 @@ def suppress_autorefresh(seconds: float = 0.5):
 def start_round():
     """Start (or restart) the timers and load the first question."""
     now = time.time()
+    ss.nr_start_error = None
 
     ss.nr_state = "answering"
     ss.nr_round_started_at = now
@@ -198,7 +191,15 @@ def start_round():
     ss.nr_round_pause_started_at = None
 
     ss.nr_q_started_at = now
-    ss.nr_q = make_question()
+    try:
+        ss.nr_q = make_question()
+    except Exception as e:
+        ss.nr_state = "idle"
+        ss.nr_round_started_at = None
+        ss.nr_q_started_at = None
+        ss.nr_q = None
+        ss.nr_start_error = str(e)
+        return
     suppress_autorefresh()
 
     ss.nr_last_choice = None
@@ -316,7 +317,12 @@ def question_time_left(now: float) -> float:
 # Question generation
 # ------------------------------------------------------------
 def make_question():
-    qdef = pick_question_def(ss.nr_game, ss.nr_q_history, ss.nr_q_used_counts)
+    qdef = pick_question_def(
+        ss.nr_game,
+        ss.nr_q_history,
+        ss.nr_q_used_counts,
+        difficulty=ss.get("nr_difficulty", "Starter"),
+    )
     built = build_question(ss.nr_game, qdef)
 
     # update tracking
@@ -482,26 +488,71 @@ def numerace_app():
         """
         <style>
         /* ---- basic layout ---- */
+        .block-container {
+            padding-top: 0.4rem;
+        }
         .nr-title { font-size: 34px; font-weight: 800; letter-spacing: 0.5px; }
-        .nr-sub   { font-size: 14px; opacity: 0.8; margin-top: -6px; }
-
-        .nr-card  { border: 1px solid rgba(15, 23, 42, 0.15); border-radius: 18px; padding: 18px; }
-        .nr-qwrap { max-width: 900px; margin-left:auto; margin-right:auto; }
+        .nr-sub   { font-size: 14px; opacity: 0.8; margin-top: -10px; }
+        .nr-header-mid{
+          text-align: center;
+        }
+        
+        .nr-card{ 
+            border: 1px solid rgba(15, 23, 42, 0.15); 
+            border-radius: 18px; 
+            padding: 10px 16px 16px 16px;
+        }
+        .nr-qwrap { max-width: 640px; margin-left:auto; margin-right:auto; }
 
         .nr-prompt{ text-align:center; font-size: 22px; font-weight: 700; margin-bottom: 10px; }
         .nr-muted { opacity: 0.75; }
 
         /* ---- header rings (Round timer only) ---- */
-        .nr-rings { display:flex; gap:14px; align-items:center; justify-content:flex-start; }
-        .nr-ring  { display:flex; flex-direction:column; align-items:center; width:78px; }
-        .nr-ring-svg { width:56px; height:56px; transform: rotate(-90deg); }
-        .nr-ring-bg  { fill:none; stroke: rgba(15, 23, 42, 0.12); stroke-width: 6; }
-        .nr-ring-fg  { fill:none; stroke-width: 6; stroke-linecap: round; }
-        .nr-ring-text{ transform: rotate(90deg); font-size: 14px; font-weight: 800; fill: rgba(15, 23, 42, 0.85); }
-        .nr-ring-label{ margin-top: 4px; font-size: 12px; font-weight: 700; opacity: 0.75; text-align:center; }
+        .nr-rings{
+          display:flex;
+          gap:10px;
+          align-items:flex-start;
+          justify-content:flex-start;
+          margin-top: -6px;
+        }
+        
+        .nr-ring{
+          width:92px;
+        }
+        
+        .nr-ring-svg{
+          width:72px;
+          height:72px;
+          transform: rotate(-90deg);
+        }
+        
+        .nr-ring-bg{
+          fill:none;
+          stroke: rgba(15, 23, 42, 0.12);
+          stroke-width: 6;
+        }
+        
+        .nr-ring-fg{
+          fill:none;
+          stroke-width: 6;
+          stroke-linecap: round;
+        }
+        
+        .nr-ring-text{
+          font-size: 13px;
+          font-weight: 800;
+          fill: rgba(15, 23, 42, 0.9);
+        }
+        
+        .nr-ring-inner-label{
+          font-size: 6px;
+          font-weight: 700;
+          fill: rgba(15, 23, 42, 0.75);
+          letter-spacing: 0.3px;
+        }
 
         /* ---- track: centered, shorter, flags ABOVE ---- */
-        .nr-track-wrap{ max-width: 640px; margin: 10px auto 6px auto; }
+        .nr-track-wrap{ max-width: 640px; margin: -10px auto 2px auto; }
 
         .nr-track-flags{
           display:flex;
@@ -527,6 +578,22 @@ def numerace_app():
           overflow: hidden;    /* <-- clip ONLY the fill */
         }
 
+        /* tick marks layer */
+        .nr-track-line::after{
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: 999px;
+          pointer-events: none;
+          background-image: repeating-linear-gradient(
+            to right,
+            transparent 0,
+            transparent calc(12.5% - 1px),
+            rgba(255,255,255,0.70) calc(12.5% - 1px),
+            rgba(255,255,255,0.70) calc(12.5% + 1px)
+          );
+        }
+
         /* BLUE progress fill */
         .nr-track-fill{
           height: 100%;
@@ -537,9 +604,9 @@ def numerace_app():
         /* racer + flourish */
         .nr-racer{
           position:absolute;
-          top:-16px;
+          top:-28px;
           transform: translateX(-50%) scaleX(-1);
-          font-size: 36px;
+          font-size: 34px;
           transition: left 0.45s ease;
           will-change: left, transform;
           z-index: 5;
@@ -548,15 +615,15 @@ def numerace_app():
         .nr-racer-finish{ animation: nr-finish-burst 0.6s ease-out; }
 
         @keyframes nr-finish-burst{
-          0%   { transform: translateX(-50%) scaleX(-1) scale(1); }
-          40%  { transform: translateX(-50%) scaleX(-1) scale(1.35) rotate(-8deg); }
-          70%  { transform: translateX(-50%) scaleX(-1) scale(1.25) rotate(6deg); }
-          100% { transform: translateX(-50%) scaleX(-1) scale(1.1); }
+          0%   { transform: translateX(-50%) scaleX(-1) translateY(0px) scale(1); }
+          40%  { transform: translateX(-50%) scaleX(-1) translateY(-4px) scale(1.30) rotate(6deg); }
+          70%  { transform: translateX(-50%) scaleX(-1) translateY(-2px) scale(1.18) rotate(-4deg); }
+          100% { transform: translateX(-50%) scaleX(-1) translateY(0px) scale(1.08); }
         }
 
         /* ---- big circular question countdown under the bar ---- */
         .nr-qcount{
-          margin: 12px auto 0 auto;
+          margin: 4px auto 0 auto;
           width: 64px;
           height: 64px;
           border-radius: 50%;
@@ -597,7 +664,7 @@ def numerace_app():
     )
 
     # Header: (left) circular timers | (mid) title | (right) control button
-    hL, hM, hR = st.columns([1.3, 2.7, 1.2], vertical_alignment="center")
+    hL, hM, hR = st.columns([1.1, 3.0, 1.1], vertical_alignment="center")
 
     with hL:
         # compute timer values (idle shows full defaults)
@@ -609,12 +676,16 @@ def numerace_app():
         st.markdown("</div>", unsafe_allow_html=True)
 
     with hM:
-        st.markdown("<div class='nr-title'>🏁 NumeRace</div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div class='nr-sub'>Round #{ss.nr_round_id} • "
-            f"Questions: {ss.nr_correct_in_round}/{ss.nr_segments}</div>",
-            unsafe_allow_html=True
-        )
+        with hM:
+            st.markdown(
+                f"""
+                <div class="nr-header-mid">
+                  <div class='nr-title'>🏁 NumeRace</div>
+                  <div class='nr-sub'>Round #{ss.nr_round_id} • {ss.nr_difficulty} • Questions: {ss.nr_correct_in_round}/{ss.nr_segments}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
     with hR:
         if ss.nr_state == "idle":
@@ -663,6 +734,15 @@ def numerace_app():
     # Idle screen (no start button here—it's in the header)
     if ss.nr_state == "idle":
         st.markdown("<div class='nr-prompt'>Ready to race?</div>", unsafe_allow_html=True)
+        ss.nr_difficulty = st.selectbox(
+            "Difficulty level",
+            DIFFICULTY_LEVELS,
+            index=DIFFICULTY_LEVELS.index(ss.get("nr_difficulty", "Starter"))
+            if ss.get("nr_difficulty", "Starter") in DIFFICULTY_LEVELS else 0,
+            key="nr_difficulty_picker",
+        )
+        if ss.get("nr_start_error"):
+            st.error(ss.nr_start_error)
         st.markdown("<div class='nr-muted' style='text-align:center;'>Press <b>Start round</b> in the header.</div>",
                     unsafe_allow_html=True)
         st.markdown("</div></div>", unsafe_allow_html=True)
