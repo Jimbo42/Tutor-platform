@@ -38,10 +38,27 @@
       "id": "q_9f3c2a1b",
       "title": "Which sum is larger?",
       "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "compare_expressions",
+        "subskill": "addition_subtraction_comparison",
+        "tags": [
+          "addition",
+          "subtraction",
+          "comparison",
+          "integers"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "arithmetic_comparison_basic"
       },
       "vars": {
         "a": {
@@ -108,6 +125,21 @@
       "id": "q_9f3d2a2c",
       "title": "Which product is smaller?",
       "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "compare_expressions",
+        "subskill": "multiplication_comparison",
+        "tags": [
+          "multiplication",
+          "comparison"
+        ]
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "arithmetic_comparison_basic"
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
@@ -178,10 +210,25 @@
       "id": "q_2g3c2a4c",
       "title": "Fraction to decimal - 2 choices",
       "enabled": true,
+      "classification": {
+        "domain": "fractions",
+        "skill": "fraction_to_decimal",
+        "subskill": "proper_fraction_to_decimal",
+        "tags": [
+          "decimal",
+          "conversion"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "fractions_basic"
       },
       "vars": {
         "denom": {
@@ -193,7 +240,9 @@
             6.0,
             7.0,
             8.0,
+            9.0,
             10.0,
+            11.0,
             12.0
           ]
         },
@@ -251,10 +300,26 @@
       "id": "q_6a3c16f4",
       "title": "Which quotient is larger?",
       "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "compare_expressions",
+        "subskill": "division_comparison",
+        "tags": [
+          "division",
+          "comparison",
+          "integers"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "arithmetic_comparison_basic"
       },
       "vars": {
         "a": {
@@ -343,10 +408,25 @@
       "id": "q_0c1519ed",
       "title": "Fraction to decimal -  3 choices",
       "enabled": true,
+      "classification": {
+        "domain": "fractions",
+        "skill": "fraction_to_decimal",
+        "subskill": "proper_fraction_to_decimal",
+        "tags": [
+          "decimal",
+          "conversion"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "fractions_basic"
       },
       "vars": {
         "denom": {
@@ -416,10 +496,25 @@
       "id": "q_7eb949f3",
       "title": "Largest Fraction",
       "enabled": true,
+      "classification": {
+        "domain": "fractions",
+        "skill": "fraction_comparison",
+        "subskill": "largest_fraction",
+        "tags": [
+          "fraction",
+          "comparison"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "fractions_comparison"
       },
       "vars": {
         "num_1": {
@@ -530,10 +625,25 @@
       "id": "q_a9411fb3",
       "title": "Smallest Fraction",
       "enabled": true,
+      "classification": {
+        "domain": "fractions",
+        "skill": "fraction_comparison",
+        "subskill": "smallest_fraction",
+        "tags": [
+          "fraction",
+          "comparison"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "fractions_comparison"
       },
       "vars": {
         "num_1": {
@@ -644,10 +754,25 @@
       "id": "q_2666cb57",
       "title": "Greatest Common Divisor",
       "enabled": true,
+      "classification": {
+        "domain": "number_theory",
+        "skill": "gcd",
+        "subskill": "greatest_common_divisor",
+        "tags": [
+          "factors",
+          "divisibility"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "number_theory_core"
       },
       "vars": {
         "a": {
@@ -660,7 +785,12 @@
           "min": 12,
           "max": 96
         },
-        "r": {
+        "m1": {
+          "kind": "int",
+          "min": 2,
+          "max": 5
+        },
+        "m2": {
           "kind": "int",
           "min": 2,
           "max": 5
@@ -674,11 +804,18 @@
             "$b"
           ]
         },
-        "f": {
+        "f1": {
           "op": "mul",
           "args": [
             "$g",
-            "$r"
+            "$m1"
+          ]
+        },
+        "f2": {
+          "op": "mul",
+          "args": [
+            "$g",
+            "$m2"
           ]
         }
       },
@@ -700,8 +837,8 @@
         {
           "op": "ne",
           "args": [
-            "$f",
-            "$g"
+            "$f1",
+            "$f2"
           ]
         }
       ],
@@ -714,16 +851,12 @@
             "value": "$g"
           },
           {
-            "label": "1",
-            "value": "1"
+            "label": "{{expr:$f1}}",
+            "value": "$f1"
           },
           {
-            "label": "{{expr:$r}}",
-            "value": "$r"
-          },
-          {
-            "label": "{{expr:$a}}",
-            "value": "$a"
+            "label": "{{expr:$f2}}",
+            "value": "$f2"
           }
         ],
         "label_places": 0,
@@ -740,10 +873,25 @@
       "id": "q_3d451102",
       "title": "Square of an Integer",
       "enabled": true,
+      "classification": {
+        "domain": "powers_roots",
+        "skill": "square",
+        "subskill": "perfect_square",
+        "tags": [
+          "powers",
+          "squares"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "powers_roots_basic"
       },
       "vars": {
         "n": {
@@ -860,10 +1008,24 @@
       "id": "q_7f2e8c91",
       "title": "Square Root of a Perfect Square",
       "enabled": true,
+      "classification": {
+        "domain": "powers_roots",
+        "skill": "square_root",
+        "subskill": "perfect_square_root",
+        "tags": [
+          "roots"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "powers_roots_basic"
       },
       "vars": {
         "root": {
@@ -966,10 +1128,24 @@
       "id": "q_5ac09d44",
       "title": "Cube of an Integer",
       "enabled": true,
+      "classification": {
+        "domain": "powers_roots",
+        "skill": "cube",
+        "subskill": "perfect_cube",
+        "tags": [
+          "powers"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "powers_roots_basic"
       },
       "vars": {
         "n": {
@@ -1086,16 +1262,30 @@
       "id": "q_81be2f0a",
       "title": "Cube Root of a Perfect Cube",
       "enabled": true,
+      "classification": {
+        "domain": "powers_roots",
+        "skill": "cube_root",
+        "subskill": "perfect_cube_root",
+        "tags": [
+          "roots"
+        ]
+      },
       "selection": {
         "weight": 1.0,
         "cooldown": 1,
         "max_per_round": 999
       },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "powers_roots_basic"
+      },
       "vars": {
         "root": {
           "kind": "int",
           "min": 2,
-          "max": 10
+          "max": 20
         },
         "d_plus": {
           "kind": "int",
@@ -1187,16 +1377,860 @@
       },
       "explain": "The cube root of {{expr:$cube_val}} is {{expr:$root}}.",
       "difficulty": "Challenging"
-    }
+    },
+    {
+      "id": "q_mul_recall_01",
+      "title": "Multiplication Fact",
+      "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "multiplication",
+        "subskill": "multiplication_fact",
+        "tags": [
+          "multiplication"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "multiplication_basic"
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 2,
+          "max": 12
+        },
+        "b": {
+          "kind": "int",
+          "min": 2,
+          "max": 12
+        },
+        "d1": {
+          "kind": "choice",
+          "values": [
+            -3,
+            -2,
+            -1,
+            1,
+            2,
+            3
+          ]
+        },
+        "d2": {
+          "kind": "choice",
+          "values": [
+            -4,
+            -2,
+            2,
+            4
+          ]
+        }
+      },
+      "derived": {
+        "correct": {
+          "op": "mul",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "wrong1": {
+          "op": "add",
+          "args": [
+            "$correct",
+            "$d1"
+          ]
+        },
+        "wrong2": {
+          "op": "add",
+          "args": [
+            "$correct",
+            "$d2"
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "ne",
+          "args": [
+            "$correct",
+            "$wrong1"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$correct",
+            "$wrong2"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$wrong1",
+            "$wrong2"
+          ]
+        }
+      ],
+      "prompt": "What is {{expr:$a}} × {{expr:$b}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct}}",
+            "value": "$correct"
+          },
+          {
+            "label": "{{expr:$wrong1}}",
+            "value": "$wrong1"
+          },
+          {
+            "label": "{{expr:$wrong2}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$correct"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$a}} × {{expr:$b}} = {{expr:$correct}}",
+      "difficulty": "Starter"
+    },
+    {
+      "id": "q_missing_factor_01",
+      "title": "Missing Factor",
+      "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "multiplication",
+        "subskill": "missing_factor",
+        "tags": [
+          "multiplication"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "multiplication_basic"
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 3,
+          "max": 12
+        },
+        "b": {
+          "kind": "int",
+          "min": 3,
+          "max": 12
+        }
+      },
+      "derived": {
+        "product": {
+          "op": "mul",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "wrong1": {
+          "op": "add",
+          "args": [
+            "$b",
+            1
+          ]
+        },
+        "wrong2": {
+          "op": "sub",
+          "args": [
+            "$b",
+            1
+          ]
+        }
+      },
+      "constraints": [
+        {
+          "op": "gt",
+          "args": [
+            "$wrong2",
+            0
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$b",
+            "$wrong1"
+          ]
+        },
+        {
+          "op": "ne",
+          "args": [
+            "$b",
+            "$wrong2"
+          ]
+        }
+      ],
+      "prompt": "{{expr:$a}} × ? = {{expr:$product}}",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$b}}",
+            "value": "$b"
+          },
+          {
+            "label": "{{expr:$wrong1}}",
+            "value": "$wrong1"
+          },
+          {
+            "label": "{{expr:$wrong2}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$b"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$product}} ÷ {{expr:$a}} = {{expr:$b}}",
+      "difficulty": "Starter"
+    },
+    {
+      "id": "q_divisible_by_01",
+      "title": "Divisible By",
+      "enabled": true,
+      "classification": {
+        "domain": "number_theory",
+        "skill": "divisibility",
+        "subskill": "divisible_by",
+        "tags": [
+          "divisibility"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "number_theory_core"
+      },
+      "vars": {
+        "n": {
+          "kind": "int",
+          "min": 4,
+          "max": 15
+        },
+        "k": {
+          "kind": "int",
+          "min": 2,
+          "max": 9
+        }
+      },
+      "derived": {
+        "correct": {
+          "op": "mul",
+          "args": [
+            "$n",
+            "$k"
+          ]
+        },
+        "wrong1": {
+          "op": "add",
+          "args": [
+            "$correct",
+            1
+          ]
+        },
+        "wrong2": {
+          "op": "add",
+          "args": [
+            "$correct",
+            2
+          ]
+        }
+      },
+      "prompt": "Which number is divisible by {{expr:$n}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct}}",
+            "value": "$correct"
+          },
+          {
+            "label": "{{expr:$wrong1}}",
+            "value": "$wrong1"
+          },
+          {
+            "label": "{{expr:$wrong2}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$correct"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$correct}} ÷ {{expr:$n}} = {{expr:$k}}",
+      "difficulty": "Starter",
+      "constraints": []
+    },
+    {
+      "id": "q_perfect_square_01",
+      "title": "Perfect Square",
+      "enabled": true,
+      "classification": {
+        "domain": "powers_roots",
+        "skill": "square",
+        "subskill": "perfect_square_recognition",
+        "tags": [
+          "squares"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "powers_roots_basic"
+      },
+      "vars": {
+        "n": {
+          "kind": "int",
+          "min": 4,
+          "max": 20
+        }
+      },
+      "derived": {
+        "correct": {
+          "op": "pow",
+          "args": [
+            "$n",
+            2
+          ]
+        },
+        "wrong1": {
+          "op": "add",
+          "args": [
+            "$correct",
+            1
+          ]
+        },
+        "wrong2": {
+          "op": "sub",
+          "args": [
+            "$correct",
+            1
+          ]
+        }
+      },
+      "prompt": "Which number is a perfect square?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct}}",
+            "value": "$correct"
+          },
+          {
+            "label": "{{expr:$wrong1}}",
+            "value": "$wrong1"
+          },
+          {
+            "label": "{{expr:$wrong2}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$correct"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$n}}^2 = {{expr:$correct}}",
+      "difficulty": "Starter"
+    },
+    {
+      "id": "q_order_ops_01",
+      "title": "Order of Operations",
+      "enabled": true,
+      "classification": {
+        "domain": "arithmetic",
+        "skill": "order_of_operations",
+        "subskill": "pemdas",
+        "tags": [
+          "operations"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "arithmetic_operations"
+      },
+      "vars": {
+        "a": {
+          "kind": "int",
+          "min": 2,
+          "max": 8
+        },
+        "b": {
+          "kind": "int",
+          "min": 2,
+          "max": 8
+        },
+        "c": {
+          "kind": "int",
+          "min": 2,
+          "max": 8
+        }
+      },
+      "derived": {
+        "mul": {
+          "op": "mul",
+          "args": [
+            "$b",
+            "$c"
+          ]
+        },
+        "correct": {
+          "op": "add",
+          "args": [
+            "$a",
+            "$mul"
+          ]
+        },
+        "wrong1": {
+          "op": "add",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        },
+        "wrong1b": {
+          "op": "mul",
+          "args": [
+            "$wrong1",
+            "$c"
+          ]
+        },
+        "wrong2": {
+          "op": "mul",
+          "args": [
+            "$a",
+            "$b"
+          ]
+        }
+      },
+      "prompt": "What is {{expr:$a}} + {{expr:$b}} × {{expr:$c}} ?",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$correct}}",
+            "value": "$correct"
+          },
+          {
+            "label": "{{expr:$wrong1b}}",
+            "value": "$wrong1b"
+          },
+          {
+            "label": "{{expr:$wrong2}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$correct"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$b}} × {{expr:$c}} = {{expr:$mul}} ; then add {{expr:$a}}",
+      "difficulty": "Intermediate"
+    },
+    {
+      "id": "q_simplify_fraction_01",
+      "title": "Simplify Fraction",
+      "enabled": true,
+      "classification": {
+        "domain": "fractions",
+        "skill": "simplification",
+        "subskill": "simplify_fraction",
+        "tags": [
+          "fractions"
+        ]
+      },
+      "selection": {
+        "weight": 1.0,
+        "cooldown": 1,
+        "max_per_round": 999
+      },
+      "reporting": {
+        "track_accuracy": true,
+        "track_response_time": true,
+        "track_attempts": true,
+        "mastery_group": "fractions_basic"
+      },
+      "vars": {
+        "n": {
+          "kind": "int",
+          "min": 2,
+          "max": 12
+        },
+        "d": {
+          "kind": "int",
+          "min": 2,
+          "max": 12
+        },
+        "k": {
+          "kind": "int",
+          "min": 2,
+          "max": 5
+        }
+      },
+      "derived": {
+        "num": {
+          "op": "mul",
+          "args": [
+            "$n",
+            "$k"
+          ]
+        },
+        "den": {
+          "op": "mul",
+          "args": [
+            "$d",
+            "$k"
+          ]
+        },
+        "wrong1": {
+          "op": "div",
+          "args": [
+            "$num",
+            "$d"
+          ]
+        },
+        "wrong2": {
+          "op": "div",
+          "args": [
+            "$den",
+            "$n"
+          ]
+        }
+      },
+      "prompt": "Simplify the fraction {{expr:$num}}/{{expr:$den}}",
+      "choices": {
+        "mode": "computed_items",
+        "items": [
+          {
+            "label": "{{expr:$n}}/{{expr:$d}}",
+            "value": "$n"
+          },
+          {
+            "label": "{{expr:$num}}/{{expr:$d}}",
+            "value": "$wrong1"
+          },
+          {
+            "label": "{{expr:$den}}/{{expr:$n}}",
+            "value": "$wrong2"
+          }
+        ],
+        "exact": "$n"
+      },
+      "answer": {
+        "mode": "choice_is_exact"
+      },
+      "explain": "{{expr:$num}}/{{expr:$den}} = {{expr:$n}}/{{expr:$d}}",
+      "difficulty": "Intermediate"
+    },
+      {
+    "id": "q_equivalent_fraction_01",
+    "title": "Equivalent Fraction",
+    "enabled": true,
+    "classification": {
+      "domain": "fractions",
+      "skill": "equivalent_fractions",
+      "subskill": "recognition",
+      "tags": ["fractions"]
+    },
+    "selection": {
+      "weight": 1.0,
+      "cooldown": 1,
+      "max_per_round": 999
+    },
+    "reporting": {
+      "track_accuracy": true,
+      "track_response_time": true,
+      "track_attempts": true,
+      "mastery_group": "fractions_advanced"
+    },
+    "vars": {
+      "n": { "kind": "int", "min": 2, "max": 7 },
+      "d": { "kind": "int", "min": 3, "max": 9 },
+      "k": { "kind": "int", "min": 2, "max": 5 }
+    },
+    "derived": {
+      "n2": { "op": "mul", "args": ["$n", "$k"] },
+      "d2": { "op": "mul", "args": ["$d", "$k"] },
+      "wrong1": { "op": "add", "args": ["$n2", 1] },
+      "wrong2": { "op": "sub", "args": ["$d2", 1] }
+    },
+    "prompt": "Which fraction is equivalent to {{expr:$n}}/{{expr:$d}} ?",
+    "choices": {
+      "mode": "computed_items",
+      "require_unique_values": true,
+      "use_label_as_value_display": true,
+      "items": [
+        { "label": "{{expr:$n2}}/{{expr:$d2}}", "value": "$n2" },
+        { "label": "{{expr:$wrong1}}/{{expr:$d2}}", "value": "$wrong1" },
+        { "label": "{{expr:$n2}}/{{expr:$wrong2}}", "value": "$wrong2" }
+      ],
+      "exact": "$n2"
+    },
+    "answer": {
+      "mode": "choice_is_exact"
+    },
+    "explain": "{{expr:$n}}/{{expr:$d}} × {{expr:$k}}/{{expr:$k}} = {{expr:$n2}}/{{expr:$d2}}",
+    "difficulty": "Challenging"
+  },
+    {
+    "id": "q_fraction_addition_01",
+    "title": "Add Fractions",
+    "enabled": true,
+    "classification": {
+      "domain": "fractions",
+      "skill": "fraction_addition",
+      "subskill": "unlike_denominators",
+      "tags": ["fractions"]
+    },
+    "selection": {
+      "weight": 1.0,
+      "cooldown": 1,
+      "max_per_round": 999
+    },
+    "reporting": {
+      "track_accuracy": true,
+      "track_response_time": true,
+      "track_attempts": true,
+      "mastery_group": "fractions_advanced"
+    },
+    "vars": {
+      "n1": { "kind": "int", "min": 1, "max": 7 },
+      "d1": { "kind": "int", "min": 3, "max": 9 },
+      "n2": { "kind": "int", "min": 1, "max": 7 },
+      "d2": { "kind": "int", "min": 3, "max": 9 }
+    },
+    "derived": {
+      "num": {
+        "op": "add",
+        "args": [
+          { "op": "mul", "args": ["$n1", "$d2"] },
+          { "op": "mul", "args": ["$n2", "$d1"] }
+        ]
+      },
+      "den": { "op": "mul", "args": ["$d1", "$d2"] },
+      "wrong1": { "op": "add", "args": ["$n1", "$n2"] },
+      "wrong2": { "op": "add", "args": ["$d1", "$d2"] }
+    },
+    "prompt": "What is {{expr:$n1}}/{{expr:$d1}} + {{expr:$n2}}/{{expr:$d2}} ?",
+    "choices": {
+      "mode": "computed_items",
+      "items": [
+        { "label": "{{expr:$num}}/{{expr:$den}}", "value": "$num" },
+        { "label": "{{expr:$wrong1}}/{{expr:$den}}", "value": "$wrong1" },
+        { "label": "{{expr:$wrong1}}/{{expr:$wrong2}}", "value": "$wrong2" }
+      ],
+      "exact": "$num"
+    },
+    "answer": {
+      "mode": "choice_is_exact"
+    },
+    "explain": "Find a common denominator: {{expr:$d1}} × {{expr:$d2}} = {{expr:$den}}",
+    "difficulty": "Challenging"
+  },
+    {
+    "id": "q_estimate_product_01",
+    "title": "Estimate Product",
+    "enabled": true,
+    "classification": {
+      "domain": "arithmetic",
+      "skill": "estimation",
+      "subskill": "product_estimate",
+      "tags": ["estimation"]
+    },
+    "selection": {
+      "weight": 1.0,
+      "cooldown": 1,
+      "max_per_round": 999
+    },
+    "reporting": {
+      "track_accuracy": true,
+      "track_response_time": true,
+      "track_attempts": true,
+      "mastery_group": "estimation"
+    },
+    "vars": {
+      "a": { "kind": "int", "min": 21, "max": 89 },
+      "b": { "kind": "int", "min": 21, "max": 89 }
+    },
+    "derived": {
+      "a10": { "op": "mul", "args": [{ "op": "div", "args": ["$a", 10] }, 10] },
+      "b10": { "op": "mul", "args": [{ "op": "div", "args": ["$b", 10] }, 10] },
+      "estimate": { "op": "mul", "args": ["$a10", "$b10"] },
+      "wrong1": { "op": "add", "args": ["$estimate", 100] },
+      "wrong2": { "op": "sub", "args": ["$estimate", 100] }
+    },
+    "prompt": "Estimate {{expr:$a}} × {{expr:$b}}",
+    "choices": {
+      "mode": "computed_items",
+      "items": [
+        { "label": "{{expr:$estimate}}", "value": "$estimate" },
+        { "label": "{{expr:$wrong1}}", "value": "$wrong1" },
+        { "label": "{{expr:$wrong2}}", "value": "$wrong2" }
+      ],
+      "exact": "$estimate"
+    },
+    "answer": {
+      "mode": "choice_is_exact"
+    },
+    "explain": "Round numbers to the nearest ten before multiplying.",
+    "difficulty": "Challenging"
+  },
+    {
+  "id": "q_fraction_subtraction_01",
+  "title": "Subtract Fractions",
+  "enabled": true,
+  "classification": {
+    "domain": "fractions",
+    "skill": "fraction_subtraction",
+    "subskill": "unlike_denominators",
+    "tags": ["fractions"]
+  },
+  "selection": {
+    "weight": 1.0,
+    "cooldown": 1,
+    "max_per_round": 999
+  },
+  "reporting": {
+    "track_accuracy": true,
+    "track_response_time": true,
+    "track_attempts": true,
+    "mastery_group": "fractions_advanced"
+  },
+  "vars": {
+    "n1": { "kind": "int", "min": 3, "max": 9 },
+    "d1": { "kind": "int", "min": 4, "max": 10 },
+    "n2": { "kind": "int", "min": 1, "max": 5 },
+    "d2": { "kind": "int", "min": 4, "max": 10 }
+  },
+  "derived": {
+    "num": {
+      "op": "sub",
+      "args": [
+        { "op": "mul", "args": ["$n1", "$d2"] },
+        { "op": "mul", "args": ["$n2", "$d1"] }
+      ]
+    },
+    "den": { "op": "mul", "args": ["$d1", "$d2"] },
+    "wrong1": { "op": "sub", "args": ["$n1", "$n2"] },
+    "wrong2": { "op": "sub", "args": ["$d1", "$d2"] }
+  },
+  "prompt": "What is {{expr:$n1}}/{{expr:$d1}} − {{expr:$n2}}/{{expr:$d2}} ?",
+  "choices": {
+    "mode": "computed_items",
+    "use_label_as_value_display": true,
+    "items": [
+      { "label": "{{expr:$num}}/{{expr:$den}}", "value": "$num" },
+      { "label": "{{expr:$wrong1}}/{{expr:$den}}", "value": "$wrong1" },
+      { "label": "{{expr:$wrong1}}/{{expr:$wrong2}}", "value": "$wrong2" }
+    ],
+    "exact": "$num"
+  },
+  "answer": {
+    "mode": "choice_is_exact"
+  },
+  "explain": "Convert to a common denominator first.",
+  "difficulty": "Challenging"
+},
+    {
+    "id": "q_fraction_closest_to_one_01",
+    "title": "Fraction Closest to One",
+    "enabled": true,
+    "classification": {
+      "domain": "fractions",
+      "skill": "fraction_reasoning",
+      "subskill": "closest_to_one",
+      "tags": ["fractions", "reasoning"]
+    },
+    "selection": {
+      "weight": 1.0,
+      "cooldown": 1,
+      "max_per_round": 999
+    },
+    "reporting": {
+      "track_accuracy": true,
+      "track_response_time": true,
+      "track_attempts": true,
+      "mastery_group": "fractions_advanced"
+    },
+    "vars": {
+      "d": { "kind": "int", "min": 6, "max": 12 },
+      "k1": { "kind": "int", "min": 1, "max": 3 },
+      "k2": { "kind": "int", "min": 3, "max": 5 }
+    },
+    "derived": {
+      "n_correct": { "op": "sub", "args": ["$d", "$k1"] },
+      "n_wrong1": { "op": "sub", "args": ["$d", "$k2"] },
+      "n_wrong2": { "op": "sub", "args": ["$d", { "op": "add", "args": ["$k2", 1] }] }
+    },
+    "prompt": "Which fraction is closest to 1 ?",
+    "choices": {
+      "mode": "computed_items",
+      "require_unique_values": true,
+      "items": [
+        { "label": "{{expr:$n_correct}}/{{expr:$d}}", "value": "$n_correct" },
+        { "label": "{{expr:$n_wrong1}}/{{expr:$d}}", "value": "$n_wrong1" },
+        { "label": "{{expr:$n_wrong2}}/{{expr:$d}}", "value": "$n_wrong2" }
+      ],
+      "exact": "$n_correct"
+    },
+    "answer": {
+      "mode": "choice_is_exact"
+    },
+    "explain": "The closer the numerator is to the denominator, the closer the fraction is to 1.",
+    "difficulty": "Challenging"
+  }
   ],
   "_all_var_names": [
-    "wrong_hi_sq",
-    "d_plus",
-    "minus_base",
-    "plus_base",
-    "correct_sq",
-    "d_minus",
-    "wrong_lo_sq",
-    "n"
+    "denom",
+    "exact",
+    "num",
+    "delta"
   ]
 }

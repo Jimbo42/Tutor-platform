@@ -55,6 +55,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
+import pandas as pd
 import streamlit as st
 
 # Optional dependency (only needed for Sheets)
@@ -170,7 +171,6 @@ def _now_iso() -> str:
 def _make_published_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-
 def append_row_by_header(tab_name: str, row_dict: dict):
     """
     Append a row to a sheet tab using the header row (row 1) to determine column order.
@@ -179,15 +179,64 @@ def append_row_by_header(tab_name: str, row_dict: dict):
     Any header columns not present in row_dict are written as blank.
     """
     ws = get_sheet(tab_name)
-    headers = ws.row_values(1)
+
+    header_cache_key = f"gsheet_headers::{tab_name}"
+    headers = st.session_state.get(header_cache_key)
+
     if not headers:
-        raise ValueError(f"Sheet '{tab_name}' has no header row (row 1).")
+        headers = ws.row_values(1)
+        if not headers:
+            raise ValueError(f"Sheet '{tab_name}' has no header row (row 1).")
+        st.session_state[header_cache_key] = headers
 
     row = [row_dict.get(h, "") for h in headers]
-
-    # USER_ENTERED lets TRUE/FALSE, dates, etc behave nicely
     ws.append_row(row, value_input_option="USER_ENTERED")
 
+def _header_index_map(ws):
+    headers = ws.row_values(1)
+    if not headers:
+        raise ValueError(f"Sheet '{ws.title}' has no header row (row 1).")
+    return {h: i + 1 for i, h in enumerate(headers)}, headers
+
+
+def row_exists_by_header(tab_name: str, header_name: str, value: str) -> bool:
+    """
+    Return True if any data row in tab_name already contains `value`
+    under column `header_name`.
+    """
+    if value is None or str(value).strip() == "":
+        return False
+
+    ws = get_sheet(tab_name)
+    idx_map, _ = _header_index_map(ws)
+
+    if header_name not in idx_map:
+        raise ValueError(f"Sheet '{tab_name}' is missing required header '{header_name}'.")
+
+    col_values = ws.col_values(idx_map[header_name])
+    target = str(value).strip()
+
+    # skip header row
+    for cell in col_values[1:]:
+        if str(cell).strip() == target:
+            return True
+    return False
+
+
+def append_row_by_header_unique(tab_name: str, row_dict: dict, unique_header: str):
+    """
+    Append row only if unique_header value is not already present.
+    Returns True if appended, False if skipped as duplicate.
+    """
+    unique_value = str(row_dict.get(unique_header, "")).strip()
+    if not unique_value:
+        raise ValueError(f"row_dict must include non-empty '{unique_header}'")
+
+    if row_exists_by_header(tab_name, unique_header, unique_value):
+        return False
+
+    append_row_by_header(tab_name, row_dict)
+    return True
 
 def publish_item(
     *,
@@ -373,36 +422,6 @@ def get_credentials(
         scopes=scopes,
     )
 
-# def get_drive_service():
-#     """Cached Drive service client (Drive API v3). Prefer user OAuth for My Drive uploads."""
-#     if "drive_service" in st.session_state:
-#         return st.session_state["drive_service"]
-#
-#     # ✅ Use OAuth user creds if present (personal My Drive quota)
-#     if "gdrive_oauth" in st.secrets:
-#         cfg = st.secrets["gdrive_oauth"]
-#         creds = UserCredentials(
-#             token=None,
-#             refresh_token=cfg["refresh_token"],
-#             token_uri=cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
-#             client_id=cfg["client_id"],
-#             client_secret=cfg["client_secret"],
-#             scopes=["https://www.googleapis.com/auth/drive.file"],
-#         )
-#         creds.refresh(Request())
-#         st.session_state["drive_service"] = build(
-#             "drive", "v3", credentials=creds, cache_discovery=False
-#         )
-#         return st.session_state["drive_service"]
-#
-#     # Fallback: service account (uploads to My Drive will fail with quota error)
-#     st.session_state["drive_service"] = build(
-#         "drive",
-#         "v3",
-#         credentials=get_credentials(scopes=["https://www.googleapis.com/auth/drive"]),
-#         cache_discovery=False,
-#     )
-#     return st.session_state["drive_service"]
 
 def get_drive_service():
     """
@@ -467,21 +486,61 @@ def get_gspread_client():
 # ---------------------------
 def get_sheet(sheet_name: str):
     """
-    Return a gspread Worksheet by name from the configured spreadsheet.
+    Return a cached gspread Worksheet by name from the configured spreadsheet.
     """
+    cache_key = f"gsheet_ws::{sheet_name}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+
     cfg = _get_google_config()
     if not cfg.spreadsheet_id:
         raise ValueError("Missing gSheets.spreadsheet_id in secrets.toml")
 
     client = get_gspread_client()
     sh = client.open_by_key(cfg.spreadsheet_id)
-    return sh.worksheet(sheet_name)
+    ws = sh.worksheet(sheet_name)
 
+    st.session_state[cache_key] = ws
+    return ws
+
+def read_sheet_as_df(sheet_name: str) -> pd.DataFrame:
+    """
+    Read a Google Sheet tab into a pandas DataFrame using row 1 as headers.
+    Blank sheet -> empty DataFrame.
+    """
+    ws = get_sheet(sheet_name)
+    values = ws.get_all_values()
+
+    if not values:
+        return pd.DataFrame()
+
+    headers = values[0]
+    rows = values[1:] if len(values) > 1 else []
+
+    # pad short rows to header length
+    normalized_rows = []
+    for row in rows:
+        if len(row) < len(headers):
+            row = row + [""] * (len(headers) - len(row))
+        elif len(row) > len(headers):
+            row = row[:len(headers)]
+        normalized_rows.append(row)
+
+    return pd.DataFrame(normalized_rows, columns=headers)
 
 def append_row(sheet_name: str, values: list[Any]):
     ws = get_sheet(sheet_name)
     ws.append_row(values)
 
+def append_rows(sheet_name: str, rows: list[list[Any]], value_input_option: str = "USER_ENTERED"):
+    """
+    Append multiple rows in one API call.
+    """
+    if not rows:
+        return
+
+    ws = get_sheet(sheet_name)
+    ws.append_rows(rows, value_input_option=value_input_option)
 
 def append_score(username: str, skill: str, quiz_id: str, score: int, max_score: int, details: str | None = None):
     append_row(
@@ -497,30 +556,182 @@ def append_score(username: str, skill: str, quiz_id: str, score: int, max_score:
         ],
     )
 
+def build_numerace_attempt_row(
+    *,
+    username,
+    round_key,
+    round_id,
+    attempt_id,
+    question_seq,
+    question_id,
+    question_title,
+    domain,
+    skill,
+    subskill,
+    difficulty,
+    mastery_group,
+    correct,
+    missed,
+    attempts_on_question,
+    response_time,
+    selected_answer,
+    correct_answer,
+    choice_count,
+    prompt_text,
+    generated_values_json,
+    tags_csv,
+):
+    return [
+        datetime.now().isoformat(),
+        username,
+        round_key,
+        round_id,
+        attempt_id,
+        question_seq,
+        question_id,
+        question_title,
+        domain,
+        skill,
+        subskill,
+        difficulty,
+        mastery_group,
+        correct,
+        missed,
+        attempts_on_question,
+        response_time,
+        selected_answer,
+        correct_answer,
+        choice_count,
+        prompt_text,
+        generated_values_json,
+        tags_csv,
+    ]
+
+def append_numerace_attempt_rows(rows: list[dict]):
+    payload = []
+    for row in rows:
+        payload.append(
+            build_numerace_attempt_row(
+                username=row.get("username", "unknown"),
+                round_key=row.get("round_key", ""),
+                round_id=row.get("round_id", ""),
+                attempt_id=row.get("attempt_id", ""),
+                question_seq=int(row.get("question_seq", 0)),
+                question_id=row.get("question_id", ""),
+                question_title=row.get("question_title", ""),
+                domain=row.get("domain", ""),
+                skill=row.get("skill", ""),
+                subskill=row.get("subskill", ""),
+                difficulty=row.get("difficulty", ""),
+                mastery_group=row.get("mastery_group", ""),
+                correct=bool(row.get("correct", False)),
+                missed=bool(row.get("missed", False)),
+                attempts_on_question=int(row.get("attempts_on_question", 0)),
+                response_time=float(row.get("response_time", 0.0)),
+                selected_answer=str(row.get("selected_answer", "")),
+                correct_answer=str(row.get("correct_answer", "")),
+                choice_count=int(row.get("choice_count", 0)),
+                prompt_text=row.get("prompt_text", ""),
+                generated_values_json=row.get("generated_values_json", "{}"),
+                tags_csv=row.get("tags_csv", ""),
+            )
+        )
+
+    append_rows("numerace_attempts", payload)
 
 def append_numerace_round(
+    *,
     username: str,
-    total_questions: int,
+    round_key: str,
+    round_id: str,
+    game_name: str,
+    questions_served: int,
+    correct: int,
     incorrect: int,
     missed: int,
     attempts_total: int,
     round_time: float,
     average_response_time: float,
+    accuracy: float,
+    score: int,
+    completed: bool,
+    start_difficulty_mix: str = "",
+    notes: str = "",
 ):
-    append_row(
-        "numerace",
-        [
-            datetime.now().isoformat(),
-            username,
-            int(total_questions),
-            int(incorrect),
-            int(missed),
-            int(attempts_total),
-            float(round_time),
-            float(average_response_time),
-        ],
-    )
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        "username": username,
+        "round_key": round_key,
+        "round_id": round_id,
+        "game_name": game_name,
+        "questions_served": int(questions_served),
+        "correct": int(correct),
+        "incorrect": int(incorrect),
+        "missed": int(missed),
+        "attempts_total": int(attempts_total),
+        "round_time": float(round_time),
+        "average_response_time": float(average_response_time),
+        "accuracy": float(accuracy),
+        "score": int(score),
+        "completed": bool(completed),
+        "start_difficulty_mix": start_difficulty_mix,
+        "notes": notes,
+    }
 
+    return append_row_by_header_unique("numerace_rounds", row, "round_key")
+
+def append_numerace_attempt(
+    *,
+    attempt_id,
+    username,
+    round_key,
+    round_id,
+    question_seq,
+    question_id,
+    question_title,
+    domain,
+    skill,
+    subskill,
+    difficulty,
+    mastery_group,
+    correct,
+    missed,
+    attempts_on_question,
+    response_time,
+    selected_answer,
+    correct_answer,
+    choice_count,
+    prompt_text,
+    generated_values_json,
+    tags_csv,
+):
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        "attempt_id": attempt_id,
+        "username": username,
+        "round_key": round_key,
+        "round_id": round_id,
+        "question_seq": question_seq,
+        "question_id": question_id,
+        "question_title": question_title,
+        "domain": domain,
+        "skill": skill,
+        "subskill": subskill,
+        "difficulty": difficulty,
+        "mastery_group": mastery_group,
+        "correct": correct,
+        "missed": missed,
+        "attempts_on_question": attempts_on_question,
+        "response_time": response_time,
+        "selected_answer": selected_answer,
+        "correct_answer": correct_answer,
+        "choice_count": choice_count,
+        "prompt_text": prompt_text,
+        "generated_values_json": generated_values_json,
+        "tags_csv": tags_csv,
+    }
+
+    return append_row_by_header_unique("numerace_attempts", row, "attempt_id")
 
 def save_pref(username: str, theme: str | None = None, difficulty: str | None = None, last_skill: str | None = None):
     """
@@ -539,31 +750,6 @@ def save_pref(username: str, theme: str | None = None, difficulty: str | None = 
 # ---------------------------
 # Google Drive helpers
 # ---------------------------
-# def upload_bytes_to_drive(
-#     *,
-#     data: bytes,
-#     filename: str,
-#     mime_type: str,
-#     folder_id: str,
-# ) -> str:
-#     """
-#     Upload bytes to a Drive folder and return file_id.
-#     """
-#     if not folder_id:
-#         raise ValueError("folder_id is required (raw Drive folder id)")
-#
-#     service = get_drive_service()
-#     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
-#
-#     file_metadata = {"name": filename, "parents": [folder_id]}
-#     created = service.files().create(
-#         body=file_metadata,
-#         media_body=media,
-#         fields="id",
-#     ).execute()
-#
-#     return created["id"]
-
 def delete_drive_file(file_id: str):
     """
     Delete a Drive file (best effort). Raises GoogleDriveUserFacingError with clear guidance.
@@ -638,19 +824,6 @@ def set_drive_file_public_read(file_id: str):
     except Exception:
         # If the account disallows public link sharing, don't fail the publish.
         pass
-
-# def set_drive_file_public_read(file_id: str):
-#     """Best-effort: make file readable by anyone with the link."""
-#     service = get_drive_service()
-#     try:
-#         service.permissions().create(
-#             fileId=file_id,
-#             body={"type": "anyone", "role": "reader"},
-#             fields="id",
-#         ).execute()
-#     except Exception:
-#         # If the account disallows public link sharing, don't fail the publish.
-#         pass
 
 def upload_interactive_json(
     *,
@@ -741,22 +914,6 @@ def upload_pdf_bytes(
         "preview_url": urls["preview_url"],
         "download_url": urls["download_url"],
     }
-
-# def update_drive_file_bytes(*, file_id: str, data: bytes, mime_type: str):
-#     """
-#     Replace the contents of an existing Drive file (same file_id).
-#     Useful for editing interactive JSON in place.
-#     """
-#     if not file_id:
-#         raise ValueError("file_id is required")
-#
-#     service = get_drive_service()
-#     media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
-#
-#     service.files().update(
-#         fileId=file_id,
-#         media_body=media,
-#     ).execute()
 
 def update_drive_file_bytes(*, file_id: str, data: bytes, mime_type: str):
     """

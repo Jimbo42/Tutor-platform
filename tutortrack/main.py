@@ -66,6 +66,9 @@ pages = {
         st.Page("chemistry.py", title="Chemistry"),
         st.Page("configuration.py", title="Configuration"),
     ],
+    "Reports": [
+        st.Page("reports.py", title="Reporting"),
+    ],
 }
 
 pg = st.navigation(pages)

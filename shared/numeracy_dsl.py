@@ -162,9 +162,15 @@ def _render(
             rest = inner[len("choice:"):].strip()
             idx_s, field = rest.split(".", 1)
             idx = int(idx_s)
-            val = choices[idx][field]
+            ch = choices[idx]
+
             if field == "value":
+                if "display_value" in ch:
+                    return str(ch["display_value"])
+                val = ch["value"]
                 return _maybe_fmt(val, choice_value_places)
+
+            val = ch[field]
             return str(val)
 
         raise ValueError(f"Unsupported token: {inner}")
@@ -181,6 +187,7 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
     if mode == "computed_items":
         out = []
         label_places = spec.get("label_places", None)
+        use_label_as_value_display = bool(spec.get("use_label_as_value_display", False))
 
         for it in spec["items"]:
             label = _render(
@@ -193,7 +200,12 @@ def _build_choices(spec: Dict[str, Any], env: Dict[str, Any], limits: Dict[str, 
                 if not isinstance(it["value"], dict)
                 else _eval_expr(it["value"], env, limits)
             )
-            out.append({"label": label, "value": value})
+
+            row = {"label": label, "value": value}
+            if use_label_as_value_display:
+                row["display_value"] = label
+
+            out.append(row)
         return out
 
     if mode == "two_decimal_one_distractor":

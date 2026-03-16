@@ -191,7 +191,20 @@ def dlg_edit_question(game: dict, qdef: dict):
     # ---------------- Header (ONLY exits) ----------------
     h1, h2, h3 = st.columns([3, 1.4, 1.4], vertical_alignment="center")
     with h1:
-        st.markdown(f"### {qdef.get('title','Untitled')}  \n`{qid}`")
+        diff = qdef.get("difficulty", "Starter")
+
+        cls = {
+            "Starter": "diff-starter",
+            "Intermediate": "diff-intermediate",
+            "Challenging": "diff-challenging"
+        }.get(diff, "diff-starter")
+
+        st.markdown(
+            f"### {qdef.get('title', 'Untitled')}  \n"
+            f"`{qid}`  "
+            f"<span class='{cls}'>{diff}</span>",
+            unsafe_allow_html=True
+        )
 
     with h2:
         if st.button("✅ Save & Exit", key=f"{ns}_save_exit", type="primary"):
@@ -786,11 +799,12 @@ def dlg_edit_question(game: dict, qdef: dict):
 
             if _is_group_constraint(cur):
                 st.subheader("Edit group constraint")
+
                 group_op = st.selectbox(
                     "Group operator",
                     ["and", "or"],
                     index=0 if cur.get("op") == "and" else 1,
-                    key=f"{ns}_k_edit_gop",
+                    key=f"{ns}_k_edit_gop_{idx}",
                 )
 
                 args = cur.get("args", []) or []
@@ -800,7 +814,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                     6,
                     value=max(2, min(6, len(args) or 2)),
                     step=1,
-                    key=f"{ns}_k_edit_gn",
+                    key=f"{ns}_k_edit_gn_{idx}",
                 )
 
                 # Normalize length
@@ -813,7 +827,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                 for i in range(int(n)):
                     c = render_expr_builder_inline(
                         game,
-                        namespace=f"{ns}_k_edit_gcmp_{i}",
+                        namespace=f"{ns}_k_edit_gcmp_{idx}_{i}",
                         initial=norm[i],
                         title=f"Comparison {i + 1}",
                         allow_math_ops=False,
@@ -834,7 +848,7 @@ def dlg_edit_question(game: dict, qdef: dict):
 
                 c1, c2, c3 = st.columns([1, 1, 1])
                 with c1:
-                    if st.button("Save group", key=f"{ns}_k_save_group", type="primary", disabled=(new_group is None)):
+                    if st.button("Save group", key=f"{ns}_k_save_group_{idx}", type="primary", disabled=(new_group is None)):
                         existing[idx] = new_group
                         st.rerun()
                 with c2:
@@ -848,7 +862,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                 st.subheader("Edit comparison constraint")
                 expr2 = render_expr_builder_inline(
                     game,
-                    namespace=f"{ns}_k_edit_cmp",
+                    namespace=f"{ns}_k_edit_cmp_{idx}",
                     initial=cur if isinstance(cur, dict) else {"op": "lt", "args": ["$a", "$b"]},
                     title="Comparison",
                     allow_math_ops=False,
@@ -858,7 +872,7 @@ def dlg_edit_question(game: dict, qdef: dict):
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("Save", key=f"{ns}_k_save_cmp", type="primary"):
+                    if st.button("Save", key=f"{ns}_k_save_cmp_{idx}", type="primary"):
                         if not expr2:
                             st.error("Fix the expression first.")
                         elif expr2.get("op") not in cmp_ops or len(expr2.get("args", [])) != 2:
@@ -867,10 +881,9 @@ def dlg_edit_question(game: dict, qdef: dict):
                             existing[idx] = expr2
                             st.rerun()
                 with c2:
-                    if st.button("Delete", key=f"{ns}_k_del_cmp", type="secondary"):
+                    if st.button("Delete", key=f"{ns}_k_del_cmp_{idx}", type="secondary"):
                         existing.pop(idx)
                         st.rerun()
-
         st.divider()
         if existing and st.button("🗑️ Clear all constraints", key=f"{ns}_k_clear_all"):
             qdef["constraints"] = []
@@ -1027,6 +1040,88 @@ def render_expr_builder_inline(
     return expr
 
 def numeracy_admin_app():
+    st.markdown("""
+    <style>
+    .diff-starter {
+        background-color: #e8f7e8;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    .diff-intermediate {
+        background-color: #fff4d6;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    .diff-challenging {
+        background-color: #ffe3e3;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    /* Card backgrounds for question list */
+    .nr-card {
+        border-radius: 12px;
+        padding: 14px 14px 10px 14px;
+        margin: 0 0 10px 0;
+        border: 1px solid rgba(80, 80, 80, 0.12);
+    }
+
+    .nr-card-starter {
+        background: rgba(232, 247, 232, 0.78);
+    }
+
+    .nr-card-intermediate {
+        background: rgba(255, 244, 214, 0.82);
+    }
+
+    .nr-card-challenging {
+        background: rgba(255, 227, 227, 0.84);
+    }
+
+    .nr-meta {
+        color: #6b7280;
+        font-size: 0.95rem;
+        margin-top: 0.15rem;
+    }
+
+    .nr-title {
+        font-weight: 700;
+        font-size: 1.08rem;
+        color: #2f3640;
+    }
+
+    .nr-badge {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        vertical-align: middle;
+    }
+
+    .nr-badge-starter {
+        background-color: #dff3df;
+        color: #215c21;
+    }
+
+    .nr-badge-intermediate {
+        background-color: #fff0c2;
+        color: #7a5600;
+    }
+
+    .nr-badge-challenging {
+        background-color: #ffd9d9;
+        color: #8b1e1e;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("🛠️ Numeracy Question Builder")
 
     # ---- Load once ----
@@ -1053,7 +1148,7 @@ def numeracy_admin_app():
     # ---- Header actions ----
     h1, h2 = st.columns([3, 1], vertical_alignment="center")
     with h2:
-        if st.button("➕ New", key="nr_new", use_container_width=True):
+        if st.button("➕ New", key="nr_new", width="stretch"):
             qid = _new_qid()
             q = _default_qdef(qid)
             qlist.append(q)
@@ -1072,49 +1167,72 @@ def numeracy_admin_app():
     for q in sorted(qlist, key=lambda x: (x.get("title", ""), x.get("id", ""))):
         qid = q["id"]
         title = q.get("title", qid)
+        diff = q.get("difficulty", "Starter")
 
-        with st.container(border=True):
-            left, right = st.columns([4, 2], vertical_alignment="center")
-            with left:
-                st.markdown(f"**{title}**")
-                st.caption(f"id: {qid}  •  difficulty: {q.get('difficulty', 'Starter')}")
+        card_cls = {
+            "Starter": "nr-card-starter",
+            "Intermediate": "nr-card-intermediate",
+            "Challenging": "nr-card-challenging",
+        }.get(diff, "nr-card-starter")
 
-            with right:
-                c1, c2, c3, c4 = st.columns(4)
+        badge_cls = {
+            "Starter": "nr-badge-starter",
+            "Intermediate": "nr-badge-intermediate",
+            "Challenging": "nr-badge-challenging",
+        }.get(diff, "nr-badge-starter")
 
-                # IMPORTANT: do NOT call dialogs here. Set flags + rerun.
-                with c1:
-                    if st.button("✏️", key=f"edit_{qid}", help="Edit"):
-                        ss.nr_edit_qid = qid
-                        ss.nr_edit_open = True
-                        ss.nr_preview_open = False
-                        st.rerun()
+        st.markdown(f"<div class='nr-card {card_cls}'>", unsafe_allow_html=True)
 
-                with c2:
-                    if st.button("👁️", key=f"prev_{qid}", help="Preview"):
-                        ss.nr_preview_qid = qid
-                        ss.nr_preview_open = True
-                        ss.nr_edit_open = False
-                        st.rerun()
+        left, right = st.columns([4, 2], vertical_alignment="center")
+        with left:
+            st.markdown(
+                f"""
+                <div class="nr-title">
+                    {title}
+                    <span class="nr-badge {badge_cls}">{diff}</span>
+                </div>
+                <div class="nr-meta">id: {qid}</div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-                with c3:
-                    if st.button("⧉", key=f"dup_{qid}", help="Duplicate"):
-                        q2 = copy.deepcopy(q)
-                        q2["id"] = _new_qid()
-                        q2["title"] = f"Copy of {title}"
-                        qlist.append(q2)
+        with right:
+            c1, c2, c3, c4 = st.columns(4)
 
-                        ss.nr_edit_qid = q2["id"]
-                        ss.nr_edit_open = True
-                        ss.nr_preview_open = False
-                        ss.nr_dirty = True
-                        st.rerun()
+            with c1:
+                if st.button("✏️", key=f"edit_{qid}", help="Edit"):
+                    ss.nr_edit_qid = qid
+                    ss.nr_edit_open = True
+                    ss.nr_preview_open = False
+                    st.rerun()
 
-                with c4:
-                    if st.button("🗑️", key=f"del_{qid}", help="Delete"):
-                        game["questions"] = [qq for qq in qlist if qq["id"] != qid]
-                        save_game(GAME_PATH, game)
-                        st.rerun()
+            with c2:
+                if st.button("👁️", key=f"prev_{qid}", help="Preview"):
+                    ss.nr_preview_qid = qid
+                    ss.nr_preview_open = True
+                    ss.nr_edit_open = False
+                    st.rerun()
+
+            with c3:
+                if st.button("⧉", key=f"dup_{qid}", help="Duplicate"):
+                    q2 = copy.deepcopy(q)
+                    q2["id"] = _new_qid()
+                    q2["title"] = f"Copy of {title}"
+                    qlist.append(q2)
+
+                    ss.nr_edit_qid = q2["id"]
+                    ss.nr_edit_open = True
+                    ss.nr_preview_open = False
+                    ss.nr_dirty = True
+                    st.rerun()
+
+            with c4:
+                if st.button("🗑️", key=f"del_{qid}", help="Delete"):
+                    game["questions"] = [qq for qq in qlist if qq["id"] != qid]
+                    save_game(GAME_PATH, game)
+                    st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ---- Open exactly ONE dialog per run (prevents DuplicateElementId) ----
     if ss.get("nr_edit_open") and ss.get("nr_edit_qid"):
