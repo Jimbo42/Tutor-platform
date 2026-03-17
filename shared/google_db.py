@@ -733,6 +733,103 @@ def append_numerace_attempt(
 
     return append_row_by_header_unique("numerace_attempts", row, "attempt_id")
 
+def append_factoring_round(
+    *,
+    username: str,
+    round_key: str,
+    round_id: str,
+    game_name: str,
+    questions_served: int,
+    questions_completed: int,
+    correct: int,
+    incorrect: int,
+    attempts_total: int,
+    round_time: float,
+    average_response_time: float,
+    levels_csv: str = "",
+    hints_used_total: int = 0,
+    factor_tool_uses_total: int = 0,
+    invalid_steps_total: int = 0,
+    completed: bool = True,
+    notes: str = "",
+):
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        "username": username,
+        "round_key": round_key,
+        "round_id": round_id,
+        "game_name": game_name,
+        "questions_served": int(questions_served),
+        "questions_completed": int(questions_completed),
+        "correct": int(correct),
+        "incorrect": int(incorrect),
+        "attempts_total": int(attempts_total),
+        "round_time": float(round_time),
+        "average_response_time": float(average_response_time),
+        "levels_csv": levels_csv,
+        "hints_used_total": int(hints_used_total),
+        "factor_tool_uses_total": int(factor_tool_uses_total),
+        "invalid_steps_total": int(invalid_steps_total),
+        "completed": bool(completed),
+        "notes": notes,
+    }
+    return append_row_by_header_unique("factoring_rounds", row, "round_key")
+
+
+def append_factoring_attempt(
+    *,
+    attempt_id: str,
+    username: str,
+    round_key: str,
+    round_id: str,
+    question_seq: int,
+    level: int,
+    question_text: str,
+    target_expr: str,
+    input_text: str,
+    parsed_ok: bool,
+    equivalent_to_target: bool,
+    is_done: bool,
+    is_progress_step: bool,
+    invalid_step: bool,
+    invalid_reason: str,
+    reactive_hint: str,
+    attempt_number: int,
+    response_time: float,
+    hints_used_so_far: int,
+    factor_tool_used_count: int,
+    steps_count: int,
+    current_expr_before: str,
+    current_expr_after: str,
+):
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        "attempt_id": attempt_id,
+        "username": username,
+        "round_key": round_key,
+        "round_id": round_id,
+        "question_seq": int(question_seq),
+        "level": int(level),
+        "question_text": question_text,
+        "target_expr": target_expr,
+        "input_text": input_text,
+        "parsed_ok": bool(parsed_ok),
+        "equivalent_to_target": bool(equivalent_to_target),
+        "is_done": bool(is_done),
+        "is_progress_step": bool(is_progress_step),
+        "invalid_step": bool(invalid_step),
+        "invalid_reason": invalid_reason,
+        "reactive_hint": reactive_hint,
+        "attempt_number": int(attempt_number),
+        "response_time": float(response_time),
+        "hints_used_so_far": int(hints_used_so_far),
+        "factor_tool_used_count": int(factor_tool_used_count),
+        "steps_count": int(steps_count),
+        "current_expr_before": current_expr_before,
+        "current_expr_after": current_expr_after,
+    }
+    return append_row_by_header_unique("factoring_attempts", row, "attempt_id")
+
 def save_pref(username: str, theme: str | None = None, difficulty: str | None = None, last_skill: str | None = None):
     """
     Upsert a preference row in 'prefs' sheet by username.

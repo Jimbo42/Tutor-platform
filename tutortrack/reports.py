@@ -2,9 +2,11 @@ import streamlit as st
 from streamlit import session_state as ss
 
 from tutortrack.numerace_reports import show_numerace_reports
+from tutortrack.factoring_reports import show_factoring_reports
 
 REPORT_ROUTES = {
     "NumeRace": show_numerace_reports,
+    "Factoring": show_factoring_reports,
 }
 # Begin rendering
 st.markdown(

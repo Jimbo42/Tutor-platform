@@ -14,6 +14,9 @@ from sympy.parsing.sympy_parser import (
     convert_xor,
 )
 from sympy import default_sort_key
+import json
+import uuid
+from shared.google_db import append_factoring_round, append_factoring_attempt
 
 # ==============================
 # 🔣 SymPy setup
@@ -40,6 +43,7 @@ def _prep_user_expr(s: str) -> str:
     s = s.replace("−", "-")      # unicode minus
     s = s.replace("–", "-")      # another unicode minus
     s = s.replace("²", "**2")
+    s = s.replace("³", "**3")
 
     # 🔧 FORCE explicit multiplication:
     # 8( ... ) -> 8*( ... )
@@ -552,20 +556,40 @@ def build_hints_common_factor(q):
 
     return hints
 
-def build_hints_trinomial_a1(q):
-    expr = q["target_expr"]
-    poly = sp.Poly(expr, j)
+def build_hints_trinomial_a1(q, expr_override=None):
+    expr = expr_override if expr_override is not None else q["target_expr"]
+    poly = sp.Poly(sp.expand(expr), j)
 
-    b = int(poly.coeffs()[1])
-    c = int(poly.coeffs()[2])
+    coeffs = poly.all_coeffs()
+    if len(coeffs) != 3:
+        return [
+            "Look for two numbers that multiply to the constant term.",
+            "Those two numbers must add to the middle coefficient.",
+            "Rewrite the middle term using those two numbers, then factor by grouping."
+        ]
 
-    hints = [
-        f"Find two numbers that multiply to {c}.",
-        f"Those two numbers must add to {b}.",
-        "Decide if the two numbers should be both positive, both negative, or one of each.",
-        f"List factor pairs of {abs(c)} and test their sums.",
-        "Rewrite the middle term using those two numbers, then factor by grouping."
-    ]
+    a = int(coeffs[0])
+    b = int(coeffs[1])
+    c = int(coeffs[2])
+
+    if a == 1:
+        hints = [
+            f"Find two numbers that multiply to {c}.",
+            f"Those two numbers must add to {b}.",
+            "Decide if the two numbers should be both positive, both negative, or one of each.",
+            f"List factor pairs of {abs(c)} and test their sums.",
+            "Rewrite the middle term using those two numbers, then factor by grouping."
+        ]
+    else:
+        ac = a * c
+        hints = [
+            f"Find two numbers that multiply to {ac}.",
+            f"Those two numbers must add to {b}.",
+            "Decide if the two numbers should be both positive, both negative, or one of each.",
+            f"List factor pairs of {abs(ac)} and test their sums.",
+            "Rewrite the middle term using those two numbers, then factor by grouping."
+        ]
+
     return hints
 
 def build_hints_trinomial_aN(q):
@@ -601,13 +625,18 @@ def build_hints_diff_squares(q):
     return hints
 
 def build_hints_trinomial_a1_gcf(q):
-    # Same as a=1 trinomial hints, but prepend the "pull out GCF first" instruction.
-    base = build_hints_trinomial_a1(q)
-    return [
-        "First: factor out the greatest common factor (GCF) from all terms.",
-        "After removing the GCF, you'll have a trinomial with leading coefficient 1.",
-    ] + base
+    current_expr = q.get("current_expr", q["target_expr"])
+    target_expr = q["target_expr"]
 
+    # If the current expression is unchanged, student has not yet removed the GCF
+    if canon_key(current_expr) == canon_key(target_expr):
+        return [
+            "First: factor out the greatest common factor (GCF) from all terms.",
+            "After removing the GCF, you'll have a trinomial with leading coefficient 1.",
+        ] + build_hints_trinomial_a1(q, expr_override=current_expr)
+
+    # Once the GCF has been removed, switch to hints based on the reduced trinomial
+    return build_hints_trinomial_a1(q, expr_override=current_expr)
 
 def build_hints_diff_squares_gcf(q):
     return [
@@ -705,6 +734,12 @@ def build_hints_for_question(q):
 # ==============================
 # 🧠 Session Engine
 # ==============================
+def _factoring_username() -> str:
+    for key in ("username", "user_name", "student_name", "student", "name"):
+        v = ss.get(key)
+        if v:
+            return str(v).strip()
+    return "unknown"
 
 def start_factoring_session(num_questions, levels):
     questions = []
@@ -743,7 +778,20 @@ def start_factoring_session(num_questions, levels):
         "questions": questions,
         "current": 0,
         "finished": False,
+        "round_id": uuid.uuid4().hex[:10],
+        "round_key": f"factoring_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+        "levels_selected": list(levels),
+        "num_questions": int(num_questions),
+        "round_logged": False,
+        "hint_view_index": -1,
     }
+
+    for i, q in enumerate(ss.factoring["questions"], start=1):
+        q["question_seq"] = i
+        q["question_start_time"] = time.time()
+        q["question_total_response_time"] = 0.0
+        q["invalid_steps"] = 0
+        q["step_events"] = []
 
 def mul_noexpand(*args):
     """Multiply without SymPy distributing over addition."""
@@ -970,6 +1018,152 @@ def to_latex_like(s: str) -> str:
 
     return s
 
+def _expr_text(expr) -> str:
+    if expr is None:
+        return ""
+    try:
+        return sp.sstr(expr)
+    except Exception:
+        return str(expr)
+
+def _is_progress_step(q, prev_expr, new_expr) -> bool:
+    if new_expr is None or prev_expr is None:
+        return False
+
+    try:
+        if not equivalent(new_expr, prev_expr):
+            return False
+
+        def factor_count(e):
+            return len(e.args) if isinstance(e, sp.Mul) else 1
+
+        old_factors = factor_count(prev_expr)
+        new_factors = factor_count(new_expr)
+        old_terms = top_level_term_count(prev_expr)
+        new_terms = top_level_term_count(new_expr)
+
+        if new_factors > old_factors:
+            return True
+
+        if new_terms < old_terms:
+            return True
+
+        # Decomposition / regrouping is valid progress for trinomial/grouping levels
+        if q.get("level") in {2, 3, 7}:
+            if isinstance(prev_expr, sp.Add) and isinstance(new_expr, sp.Add):
+                if new_terms > old_terms:
+                    return True
+
+        return False
+
+    except Exception:
+        return False
+
+def _log_factoring_attempt(
+    q,
+    *,
+    input_text: str,
+    parsed_ok: bool,
+    expr_before,
+    expr_after,
+    equivalent_to_target: bool,
+    is_done: bool,
+    invalid_step: bool,
+    invalid_reason: str,
+    reactive_hint: str,
+):
+    try:
+        username = _factoring_username()
+        round_key = ss.factoring.get("round_key", "")
+        round_id = ss.factoring.get("round_id", "")
+        now = time.time()
+        response_time = max(0.0, now - q.get("question_start_time", now))
+        q["question_total_response_time"] = q.get("question_total_response_time", 0.0) + response_time
+        q["question_start_time"] = now
+
+        if invalid_step:
+            q["invalid_steps"] = q.get("invalid_steps", 0) + 1
+
+        is_progress = _is_progress_step(q, expr_before, expr_after) if expr_after is not None else False
+
+        attempt_id = f"factatt_{uuid.uuid4().hex[:12]}"
+
+        append_factoring_attempt(
+            attempt_id=attempt_id,
+            username=username,
+            round_key=round_key,
+            round_id=round_id,
+            question_seq=q.get("question_seq", 0),
+            level=q.get("level", 0),
+            question_text=q.get("question", ""),
+            target_expr=_expr_text(q.get("target_expr")),
+            input_text=input_text or "",
+            parsed_ok=parsed_ok,
+            equivalent_to_target=equivalent_to_target,
+            is_done=is_done,
+            is_progress_step=is_progress,
+            invalid_step=invalid_step,
+            invalid_reason=invalid_reason or "",
+            reactive_hint=reactive_hint or "",
+            attempt_number=int(q.get("attempts", 0)),
+            response_time=response_time,
+            hints_used_so_far=int(q.get("hints_used", 0)),
+            factor_tool_used_count=int(q.get("factor_tool_used_count", 0)),
+            steps_count=len(q.get("steps", [])),
+            current_expr_before=_expr_text(expr_before),
+            current_expr_after=_expr_text(expr_after),
+        )
+    except Exception:
+        pass
+
+
+def _log_factoring_round_once():
+    try:
+        if not ss.get("factoring"):
+            return
+        if ss.factoring.get("round_logged"):
+            return
+
+        questions = ss.factoring.get("questions", [])
+        elapsed = max(0.0, time.time() - ss.factoring.get("start_time", time.time()))
+        total = len(questions)
+        correct = sum(1 for q in questions if q.get("correct"))
+        incorrect = total - correct
+        attempts_total = sum(int(q.get("attempts", 0)) for q in questions)
+        hints_used_total = sum(int(q.get("hints_used", 0)) for q in questions)
+        factor_tool_uses_total = sum(int(q.get("factor_tool_used_count", 0)) for q in questions)
+        invalid_steps_total = sum(int(q.get("invalid_steps", 0)) for q in questions)
+
+        response_times = [float(q.get("question_total_response_time", 0.0)) for q in questions if q.get("question_total_response_time", 0.0) > 0]
+        avg_response_time = (sum(response_times) / len(response_times)) if response_times else 0.0
+
+        levels_csv = ",".join(str(x) for x in ss.factoring.get("levels_selected", []))
+        username = _factoring_username()
+
+        append_factoring_round(
+            username=username,
+            round_key=ss.factoring.get("round_key", ""),
+            round_id=ss.factoring.get("round_id", ""),
+            game_name="Factoring Practice",
+            questions_served=total,
+            questions_completed=total,
+            correct=correct,
+            incorrect=incorrect,
+            attempts_total=attempts_total,
+            round_time=elapsed,
+            average_response_time=avg_response_time,
+            levels_csv=levels_csv,
+            hints_used_total=hints_used_total,
+            factor_tool_uses_total=factor_tool_uses_total,
+            invalid_steps_total=invalid_steps_total,
+            completed=True,
+            notes="",
+        )
+
+        ss.factoring["round_logged"] = True
+    except Exception:
+        pass
+
 # ==============================
 # 🖥️ UI
 # ==============================
@@ -1001,7 +1195,6 @@ def factoring_practice():
     if ss.factoring is None:
         st.markdown("### ⚙️ Practice Setup")
 
-        # Map for labels (8 types)
         level_map = {
             1: "Level 1 — Common Factor (j,k)",
             2: "Level 2 — Trinomial (a = 1)",
@@ -1036,7 +1229,7 @@ def factoring_practice():
         if not ss.selected_levels:
             st.warning("Select at least one question type to continue.")
         else:
-            if st.button("🚀 Start Practice", use_container_width=True):
+            if st.button("🚀 Start Practice", width="stretch"):
                 ss.setup_open = False
                 start_factoring_session(num_q, ss.selected_levels)
                 ss.fact_input_version += 1
@@ -1055,6 +1248,8 @@ def factoring_practice():
         correct = sum(1 for q in questions if q.get("correct"))
         first_try = sum(1 for q in questions if q.get("first_try_correct"))
 
+        _log_factoring_round_once()
+
         st.success("✅ Practice Complete!")
         st.markdown(
             f"**Time:** {elapsed:.1f} seconds  \n"
@@ -1067,10 +1262,11 @@ def factoring_practice():
                 icon = "✅" if q.get("correct") else "❌"
                 st.markdown(
                     f"**{i}.** {sp.latex(q['target_expr'])}  \n"
-                    f"{icon} Final answer: `{q.get('user_answer','')}`  \n"
-                    f"Wrong attempts: {q.get('attempts',0)}  \n"
-                    f"Hints used: {q.get('hints_used',0)}  \n"
-                    f"Factor tool used: {q.get('factor_tool_used_count', 0)}"
+                    f"{icon} Final answer: `{q.get('user_answer', '')}`  \n"
+                    f"Wrong attempts: {q.get('attempts', 0)}  \n"
+                    f"Hints used: {q.get('hints_used', 0)}  \n"
+                    f"Factor tool used: {q.get('factor_tool_used_count', 0)}  \n"
+                    f"Invalid steps: {q.get('invalid_steps', 0)}"
                 )
 
         if st.button("🔁 New Practice Set"):
@@ -1096,56 +1292,62 @@ def factoring_practice():
     q.setdefault("user_answer", "")
     q.setdefault("current_expr", q["target_expr"])
 
-    # Hints (RIGHT COLUMN ONLY)
+    # Hints
     q.setdefault("hints_shown", [])
     q.setdefault("hint_index", 0)
     q.setdefault("hints_used", 0)
+    q.setdefault("hint_view_index", -1)
 
-    # Factor-pairs tool tracking (per-question)
+    # Factor-pairs tool tracking
     q.setdefault("factor_tool_used", False)
     q.setdefault("factor_tool_used_count", 0)
 
-    # ✅ Flash correct state (pause + show final before advancing)
+    # Tracking fields
+    q.setdefault("question_seq", idx + 1)
+    q.setdefault("question_start_time", time.time())
+    q.setdefault("question_total_response_time", 0.0)
+    q.setdefault("invalid_steps", 0)
+
+    # Flash correct state
     q.setdefault("flash_correct", False)
     q.setdefault("flash_final_latex", "")
 
-    # ✅ If last submit marked as correct, show final briefly then advance
+    # If last submit marked as correct, show final briefly then advance
     if q.get("flash_correct"):
-        # Clean "final display": original question + final only (no working/steps)
         st.success("✅ Fully Factored")
 
-        # Show the original question
         try:
             st.latex(r"\Large " + sp.latex(q["target_expr"]))
         except Exception:
-            # fallback if something odd slips through
             st.markdown(f"**Original:** `{str(q['target_expr'])}`")
 
-        # Show final answer (what we accepted)
         if q.get("flash_final_latex"):
             st.latex(r"\Large = " + q["flash_final_latex"])
 
-        # Slightly longer pause so the student can see it
         time.sleep(2.7)
 
-        # Clear flash state + messages
         q["flash_correct"] = False
         q["last_message"] = ""
-        q["steps"] = []  # optional: keep the next screen clean
-        q["user_answer"] = ""  # optional
+        q["steps"] = []
+        q["user_answer"] = ""
 
-        # Advance
+        ss.pop(f"fp_opened_{idx}", None)
+
         if idx + 1 >= len(questions):
             ss.factoring["finished"] = True
         else:
             ss.factoring["current"] += 1
-            questions[ss.factoring["current"]]["last_message"] = ""
+            next_idx = ss.factoring["current"]
+            questions[next_idx].setdefault("question_start_time", time.time())
+            questions[next_idx]["question_start_time"] = time.time()
+            questions[next_idx]["last_message"] = ""
+            questions[next_idx]["hint_view_index"] = -1
 
         ss.fact_input_version += 1
         ss.fact_live_input = ""
         st.rerun()
 
-    # Build hints lazily (normal path)
+    # Build hints lazily
     if not q.get("available_hints"):
         q["available_hints"] = build_hints_for_question(q)
 
@@ -1159,26 +1361,93 @@ def factoring_practice():
         else:
             st.latex(r"\LARGE \textbf{Factor:}\quad " + sp.latex(q["target_expr"]))
 
-        # IMPORTANT: no steps rendered here (avoid duplication)
-
     with right:
+        hints = q.get("available_hints") or []
+        shown = q.get("hints_shown", [])
+        view_i = q.get("hint_view_index", -1)
+
         st.markdown(f"💡 Hints used: **{q.get('hints_used', 0)}**")
 
-        if st.button("💡 Show Hint", key=f"show_hint_{idx}"):
-            hints = q.get("available_hints") or []
-            if q["hint_index"] < len(hints):
-                q["hints_shown"].append("💡 " + hints[q["hint_index"]])
-                q["hint_index"] += 1
+        # ---- Hint navigator header ----
+        nav1, nav2, nav3 = st.columns([1, 3, 1])
+
+        with nav1:
+            prev_disabled = (len(shown) == 0) or (view_i <= 0)
+            if st.button("◀", key=f"hint_prev_{idx}", disabled=prev_disabled, width="stretch"):
+                q["hint_view_index"] = max(0, view_i - 1)
+                st.rerun()
+
+        with nav2:
+            total_hints = len(hints)
+            shown_count = len(shown)
+            if shown_count == 0:
+                st.caption(f"Hint 0 of {total_hints}")
             else:
-                q["hints_shown"].append("💡 No more hints available for this question.")
+                st.caption(f"Hint {view_i + 1} of {shown_count}")
 
-            q["hints_used"] = len(q["hints_shown"])
-            st.rerun()
+        with nav3:
+            next_disabled = len(hints) == 0 or len(shown) >= len(hints) and view_i >= len(shown) - 1
+            if st.button("▶", key=f"hint_next_{idx}", disabled=next_disabled, width="stretch"):
+                # Reveal next unseen hint if possible
+                if len(shown) < len(hints):
+                    q["hints_shown"].append("💡 " + hints[len(shown)])
+                    q["hint_index"] = len(q["hints_shown"])
+                    q["hint_view_index"] = len(q["hints_shown"]) - 1
+                    q["hints_used"] = len(q["hints_shown"])
+                else:
+                    # Otherwise just move forward through already revealed hints
+                    q["hint_view_index"] = min(len(shown) - 1, view_i + 1)
 
-        with st.popover("🧰 Factor Pairs", use_container_width=True):
-            # Code inside a popover only runs when it is opened -> perfect place to track usage
-            q["factor_tool_used"] = True
-            q["factor_tool_used_count"] = q.get("factor_tool_used_count", 0) + 1
+                st.rerun()
+
+        # ---- Hint card ----
+        if len(shown) == 0:
+            st.markdown(
+                """
+                <div style="
+                    background: rgba(219, 234, 254, 0.35);
+                    border: 1px dashed rgba(147, 197, 253, 0.9);
+                    border-radius: 14px;
+                    padding: 14px 16px;
+                    color: #4b5563;
+                    line-height: 1.55;
+                    min-height: 120px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    text-align: center;
+                ">
+                    <div style="font-size: 1.0rem;">Click ▶ to reveal the first hint.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        elif 0 <= view_i < len(shown):
+            st.markdown(
+                f"""
+                <div style="
+                    background: rgba(219, 234, 254, 0.78);
+                    border: 1px solid rgba(147, 197, 253, 0.95);
+                    border-radius: 14px;
+                    padding: 14px 16px;
+                    color: #0f4c81;
+                    line-height: 1.55;
+                    min-height: 120px;
+                    display: flex;
+                    align-items: flex-start;
+                ">
+                    <div style="font-size: 1.05rem;">{shown[view_i]}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # ---- Factor pairs tool ----
+        with st.popover("🧰 Factor Pairs", width="stretch"):
+            if not ss.get(f"fp_opened_{idx}", False):
+                q["factor_tool_used"] = True
+                q["factor_tool_used_count"] = q.get("factor_tool_used_count", 0) + 1
+                ss[f"fp_opened_{idx}"] = True
 
             st.caption("Enter an integer and I'll list its factor pairs (including negatives when needed).")
 
@@ -1192,20 +1461,13 @@ def factoring_practice():
                 st.markdown("**Factor pairs:**")
                 st.write(", ".join([f"({a}, {b})" for a, b in pairs]))
 
-        # Render shown hints only (no feedback messages here)
-        if q["hints_shown"]:
-            for h in q["hints_shown"]:
-                st.info(h)
-
     st.markdown("### ✏️ Working:")
 
     if q.get("last_message"):
         st.info(q["last_message"])
 
-    # Show original line (left aligned)
     st.markdown(f"${sp.latex(q['target_expr'])}$")
 
-    # Show steps ONCE (only here)
     for step in q["steps"]:
         txt = step["text"] if isinstance(step, dict) else str(step)
         latex_txt = to_latex_like(txt)
@@ -1216,8 +1478,10 @@ def factoring_practice():
     # ------------------------------
     st.markdown("Your answer:")
 
+    st.caption("Use ^ for powers, for example: j^2, k^3, (j+2)^2")
+
     user_answer = st.text_input(
-        "Your answer",  # must be non-empty (Streamlit warning otherwise)
+        "Your answer",
         key=f"fact_answer_box_{ss.fact_input_version}",
         autocomplete="off",
         label_visibility="collapsed",
@@ -1229,8 +1493,11 @@ def factoring_practice():
         if st.button("✅ Submit"):
 
             user_answer = (user_answer or "").strip()
+            prev_expr = q.get("current_expr", q["target_expr"])
 
-            # Special case: sum of squares / irreducible
+            # -------------------------
+            # Level 5 special case
+            # -------------------------
             if q["level"] == 5:
                 u = user_answer.lower().replace(" ", "")
                 ok = u in {
@@ -1241,14 +1508,27 @@ def factoring_practice():
                     "norealfactors",
                     "norealfactor",
                 }
+
                 if ok:
-                    q["correct"] = True
                     q["user_answer"] = user_answer
+                    q["correct"] = True
                     if q["attempts"] == 0:
                         q["first_try_correct"] = True
                     q["last_message"] = "🎉 Correct — this does not factor over the reals."
 
-                    # flash then advance
+                    _log_factoring_attempt(
+                        q,
+                        input_text=user_answer,
+                        parsed_ok=True,
+                        expr_before=prev_expr,
+                        expr_after=prev_expr,
+                        equivalent_to_target=True,
+                        is_done=True,
+                        invalid_step=False,
+                        invalid_reason="",
+                        reactive_hint="",
+                    )
+
                     q["flash_correct"] = True
                     q["flash_final_latex"] = sp.latex(q["target_expr"])
 
@@ -1257,6 +1537,20 @@ def factoring_practice():
                 else:
                     q["attempts"] += 1
                     q["last_message"] = "❌ For this one, enter: irreducible / prime / cannot be factored."
+
+                    _log_factoring_attempt(
+                        q,
+                        input_text=user_answer,
+                        parsed_ok=True,
+                        expr_before=prev_expr,
+                        expr_after=prev_expr,
+                        equivalent_to_target=True,
+                        is_done=False,
+                        invalid_step=True,
+                        invalid_reason="level5_wrong_text",
+                        reactive_hint=q["last_message"],
+                    )
+
                     st.rerun()
                 return
 
@@ -1268,21 +1562,48 @@ def factoring_practice():
             if expr_u is None:
                 q["attempts"] += 1
                 q["last_message"] = "❌ I couldn't parse that. Try (j-2)(j+3) or 8(6j-5k)."
+
+                _log_factoring_attempt(
+                    q,
+                    input_text=user_answer,
+                    parsed_ok=False,
+                    expr_before=prev_expr,
+                    expr_after=None,
+                    equivalent_to_target=False,
+                    is_done=False,
+                    invalid_step=True,
+                    invalid_reason="parse_error",
+                    reactive_hint=q["last_message"],
+                )
+
                 st.rerun()
                 return
-
-            prev_expr = q.get("current_expr", q["target_expr"])
 
             # Must be equivalent to original
             if not equivalent(expr_u, q["target_expr"]):
                 q["attempts"] += 1
                 rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
                 q["last_message"] = "❌ " + (rh if rh else "This is not equivalent to the original expression.")
+
+                _log_factoring_attempt(
+                    q,
+                    input_text=user_answer,
+                    parsed_ok=True,
+                    expr_before=prev_expr,
+                    expr_after=expr_u,
+                    equivalent_to_target=False,
+                    is_done=False,
+                    invalid_step=True,
+                    invalid_reason="not_equivalent_to_target",
+                    reactive_hint=q["last_message"],
+                )
+
                 st.rerun()
                 return
 
-            # If final answer
-            # DONE if: (a) matches a precomputed final answer OR (b) is fully factored (except Level 6)
+            # -------------------------
+            # Final answer detection
+            # -------------------------
             done = False
 
             try:
@@ -1291,16 +1612,13 @@ def factoring_practice():
             except Exception:
                 done = False
 
-            # Robust fallback: fully-factored equivalent forms should be accepted
-            # (Keep Level 6 strictness as you already have it.)
             if not done and q.get("level") != 6:
                 if is_fully_factored_expr(expr_u):
                     done = True
 
-            # If final answer
             if done:
 
-                # Vertex-form strictness (keep your existing check)
+                # Level 6: keep strict vertex-form simplification
                 if q["level"] == 6 and q.get("vertex_final_expr") is not None:
                     student_terms = top_level_term_count(expr_u)
                     final_terms = top_level_term_count(q["vertex_final_expr"])
@@ -1310,18 +1628,33 @@ def factoring_practice():
                         if canon_key(expr_u) != last_key:
                             q["steps"].append({"expr": expr_u, "text": user_answer})
                             q["current_expr"] = expr_u
+                            q["available_hints"] = build_hints_for_question(q)
 
                         q["last_message"] = "⚠️ Finish simplifying the constants."
                         ss.fact_input_version += 1
+
+                        _log_factoring_attempt(
+                            q,
+                            input_text=user_answer,
+                            parsed_ok=True,
+                            expr_before=prev_expr,
+                            expr_after=expr_u,
+                            equivalent_to_target=True,
+                            is_done=False,
+                            invalid_step=False,
+                            invalid_reason="",
+                            reactive_hint=q["last_message"],
+                        )
+
                         st.rerun()
                         return
 
-                # append final step if new
                 last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(prev_expr)
                 if canon_key(expr_u) != last_key:
                     q["steps"].append({"expr": expr_u, "text": user_answer})
 
                 q["current_expr"] = expr_u
+                q["available_hints"] = build_hints_for_question(q)
                 q["user_answer"] = user_answer
                 q["correct"] = True
                 if q["attempts"] == 0:
@@ -1329,29 +1662,79 @@ def factoring_practice():
 
                 q["last_message"] = "🎉 Fully factored!"
 
-                # flash then advance
+                _log_factoring_attempt(
+                    q,
+                    input_text=user_answer,
+                    parsed_ok=True,
+                    expr_before=prev_expr,
+                    expr_after=expr_u,
+                    equivalent_to_target=True,
+                    is_done=True,
+                    invalid_step=False,
+                    invalid_reason="",
+                    reactive_hint="",
+                )
+
                 q["flash_correct"] = True
                 q["flash_final_latex"] = sp.latex(expr_u)
 
                 ss.fact_input_version += 1
+                ss.pop(f"fp_opened_{idx}", None)
                 st.rerun()
                 return
 
-            # Equivalent but not changed
+            # -------------------------
+            # Equivalent but unchanged
+            # -------------------------
             last_key = canon_key(q["steps"][-1]["expr"]) if q["steps"] else canon_key(prev_expr)
             if canon_key(expr_u) == last_key:
                 rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
                 q["last_message"] = "⚠️ " + (rh if rh else "That does not change the expression. Try factoring something.")
+
+                _log_factoring_attempt(
+                    q,
+                    input_text=user_answer,
+                    parsed_ok=True,
+                    expr_before=prev_expr,
+                    expr_after=expr_u,
+                    equivalent_to_target=True,
+                    is_done=False,
+                    invalid_step=True,
+                    invalid_reason="no_change",
+                    reactive_hint=q["last_message"],
+                )
+
                 st.rerun()
                 return
 
-            # Record a valid step
+            # -------------------------
+            # Valid intermediate step
+            # -------------------------
             rh = get_reactive_hint(q, expr_u, last_expr=prev_expr)
+            progress = _is_progress_step(q, prev_expr, expr_u)
 
             q["steps"].append({"expr": expr_u, "text": user_answer})
             q["current_expr"] = expr_u
+            q["available_hints"] = build_hints_for_question(q)
 
-            q["last_message"] = ("🧠 " + rh) if rh else "✅ Good step — keep factoring."
+            if progress:
+                q["last_message"] = ("🧠 " + rh) if rh else "✅ Good step — keep factoring."
+            else:
+                q["last_message"] = ("⚠️ " + rh) if rh else "⚠️ Equivalent, but this does not look like a useful factoring step."
+
+            _log_factoring_attempt(
+                q,
+                input_text=user_answer,
+                parsed_ok=True,
+                expr_before=prev_expr,
+                expr_after=expr_u,
+                equivalent_to_target=True,
+                is_done=False,
+                invalid_step=not progress,
+                invalid_reason="" if progress else "equivalent_but_not_progress",
+                reactive_hint=q["last_message"],
+            )
+
             ss.fact_input_version += 1
             st.rerun()
             return
