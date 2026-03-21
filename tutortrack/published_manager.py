@@ -15,6 +15,7 @@ from shared.google_db import (
     update_drive_file_bytes,
     safe_filename,
     delete_drive_file,
+    update_cell_by_published_id,
 )
 
 # -----------------------------
@@ -30,6 +31,21 @@ ss.setdefault("pm_preview_error", None)
 # Cache for interactive JSON payloads (drive_file_id -> dict)
 ss.setdefault("pm_interactive_cache", {})        # {file_id: obj}
 ss.setdefault("pm_interactive_cache_meta", {})   # {file_id: {"loaded_at": "..."}}
+
+REFERENCE_GENERATOR_IDS = [
+    ("", "— No reference link —"),
+    ("solving_eq_l1", "Solving Equations - Level 1"),
+    ("solving_eq_l2", "Solving Equations - Level 2"),
+    ("solving_eq_l3", "Solving Equations - Level 3"),
+    ("solving_eq_l4", "Solving Equations - Level 4"),
+    ("factoring_l1", "Factoring - Level 1"),
+    ("factoring_l2", "Factoring - Level 2"),
+    ("factoring_l3", "Factoring - Level 3"),
+    ("factoring_l4", "Factoring - Level 4"),
+    ("factoring_l5", "Factoring - Level 5"),
+    ("factoring_l6", "Factoring - Level 6"),
+    ("factoring_l7", "Factoring - Level 7"),
+]
 
 # -----------------------------
 # Drive helpers
@@ -111,6 +127,7 @@ def _normalize_catalog_records(records: list[dict], content_type: str) -> pd.Dat
         ("created_at", ""),
         ("source_app", ""),
         ("notes", ""),
+        ("generator_id", ""),
     ]:
         if col not in df.columns:
             df[col] = default
@@ -118,6 +135,20 @@ def _normalize_catalog_records(records: list[dict], content_type: str) -> pd.Dat
     df["type"] = content_type
     return df
 
+def _used_generator_ids_excluding(published_id: str | None = None) -> set[str]:
+    rows = _load_tab_records(TAB_PDFS)
+    used = set()
+
+    for r in rows:
+        pid = str(r.get("published_id", "")).strip()
+        gid = str(r.get("generator_id", "")).strip()
+        if not gid:
+            continue
+        if published_id and pid == published_id:
+            continue
+        used.add(gid)
+
+    return used
 
 def _find_row_number_by_published_id(tab_name: str, published_id: str) -> int | None:
     """
@@ -367,6 +398,57 @@ def open_edit_interactive_json_dialog(item: dict):
 
     with c3:
         if st.button("Close", width="stretch"):
+            st.rerun()
+
+@st.dialog("🔗 Assign Reference PDF", width="large")
+def open_assign_generator_dialog(item: dict):
+    published_id = str(item.get("published_id", "")).strip()
+    title = str(item.get("title", "")).strip() or "Untitled"
+    current_gid = str(item.get("generator_id", "")).strip()
+
+    st.subheader(title)
+    st.caption("Assign this PDF as the reference lesson for one practice generator.")
+    st.divider()
+
+    used_ids = _used_generator_ids_excluding(published_id)
+    allowed = []
+    for gid, label in REFERENCE_GENERATOR_IDS:
+        if gid == "" or gid == current_gid or gid not in used_ids:
+            allowed.append((gid, label))
+
+    labels = [label for _, label in allowed]
+    gid_by_label = {label: gid for gid, label in allowed}
+
+    current_label = next((label for gid, label in allowed if gid == current_gid), labels[0])
+
+    selected_label = st.selectbox(
+        "Generator ID",
+        labels,
+        index=labels.index(current_label),
+        key=f"pm_assign_gid_{published_id}",
+    )
+
+    selected_gid = gid_by_label[selected_label]
+
+    st.caption("Only unassigned generator IDs are offered, so the relationship stays one-to-one.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("💾 Save assignment", width="stretch"):
+            ok = update_cell_by_published_id(TAB_PDFS, published_id, "generator_id", selected_gid)
+            if not ok:
+                st.error("Could not update generator_id for this PDF.")
+                return
+            st.toast("Reference assignment saved ✅", icon="✅")
+            st.rerun()
+
+    with c2:
+        if st.button("Clear assignment", width="stretch"):
+            ok = update_cell_by_published_id(TAB_PDFS, published_id, "generator_id", "")
+            if not ok:
+                st.error("Could not clear generator_id for this PDF.")
+                return
+            st.toast("Reference assignment cleared", icon="🧹")
             st.rerun()
 
 # -----------------------------
@@ -649,6 +731,9 @@ def show_published_manager():
                     if ctype == "interactive":
                         if st.button("✏️", key=f"pm_edit_{i}", width="stretch", help="Edit"):
                             open_edit_interactive_json_dialog(row.to_dict())
+                    elif ctype == "pdf":
+                        if st.button("🔗", key=f"pm_link_{i}", width="stretch", help="Assign reference PDF"):
+                            open_assign_generator_dialog(row.to_dict())
 
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 

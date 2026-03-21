@@ -16,7 +16,11 @@ from sympy.parsing.sympy_parser import (
 from sympy import default_sort_key
 import json
 import uuid
-from shared.google_db import append_factoring_round, append_factoring_attempt
+from shared.google_db import (
+    append_factoring_round,
+    append_factoring_attempt,
+    get_published_pdf_preview_url_by_generator_id,
+)
 
 # ==============================
 # 🔣 SymPy setup
@@ -119,6 +123,9 @@ def factor_pairs(n: int):
     # sort by |a| then |b| for a stable display
     pairs = sorted(pairs, key=lambda t: (abs(t[0]), abs(t[1]), t[0], t[1]))
     return pairs
+
+def factoring_generator_id(level: int) -> str:
+    return f"factoring_l{int(level)}"
 
 # ==============================
 # 🧩 Problem Generators
@@ -754,12 +761,17 @@ def start_factoring_session(num_questions, levels):
             disp, target_expr, final_answers = out
             vertex_expr = None
 
+        lesson_preview_url = get_published_pdf_preview_url_by_generator_id(
+            factoring_generator_id(lvl)
+        )
+
         questions.append({
             "question": disp,
             "target_expr": target_expr,
             "final_answers": final_answers,
             "vertex_final_expr": vertex_expr,   # 👈 NEW
             "level": lvl,
+            "lesson_preview_url": lesson_preview_url,
             "attempts": 0,
             "hints_used": 0,
             "available_hints": None,
@@ -1164,6 +1176,13 @@ def _log_factoring_round_once():
     except Exception:
         pass
 
+import streamlit.components.v1 as components
+
+@st.dialog("📘 Reference Lesson", width="large")
+def open_reference_pdf_dialog(title: str, preview_url: str):
+    st.subheader(title)
+    components.iframe(preview_url, height=700, scrolling=True)
+
 # ==============================
 # 🖥️ UI
 # ==============================
@@ -1311,6 +1330,7 @@ def factoring_practice():
     # Flash correct state
     q.setdefault("flash_correct", False)
     q.setdefault("flash_final_latex", "")
+    lesson_preview_url = q.get("lesson_preview_url")
 
     # If last submit marked as correct, show final briefly then advance
     if q.get("flash_correct"):
@@ -1355,6 +1375,18 @@ def factoring_practice():
 
     with left:
         st.markdown(f"### Question {idx + 1} of {len(questions)}")
+        st.caption(GENERATORS[q["level"]][0])
+
+        if lesson_preview_url:
+            b1, b2 = st.columns([1.2, 4.8], vertical_alignment="center")
+            with b1:
+                if st.button("📘 View Lesson", key=f"fact_lesson_{idx}", width="stretch"):
+                    open_reference_pdf_dialog(
+                        f"Reference Lesson — {GENERATORS[q['level']][0]}",
+                        lesson_preview_url,
+                    )
+            with b2:
+                st.caption("Open a related lesson for this factoring type.")
 
         if q["level"] == 6:
             st.latex(r"\LARGE \textbf{Write in vertex form:}\quad " + sp.latex(q["target_expr"]))
@@ -1362,6 +1394,7 @@ def factoring_practice():
             st.latex(r"\LARGE \textbf{Factor:}\quad " + sp.latex(q["target_expr"]))
 
     with right:
+
         hints = q.get("available_hints") or []
         shown = q.get("hints_shown", [])
         view_i = q.get("hint_view_index", -1)

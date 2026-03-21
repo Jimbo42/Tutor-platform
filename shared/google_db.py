@@ -528,6 +528,68 @@ def read_sheet_as_df(sheet_name: str) -> pd.DataFrame:
 
     return pd.DataFrame(normalized_rows, columns=headers)
 
+def update_cell_by_published_id(tab_name: str, published_id: str, header_name: str, value: str):
+    """
+    Update one cell on a sheet row identified by published_id.
+    """
+    ws = get_sheet(tab_name)
+    idx_map, _ = _header_index_map(ws)
+
+    if "published_id" not in idx_map:
+        raise ValueError(f"Sheet '{tab_name}' is missing required header 'published_id'.")
+    if header_name not in idx_map:
+        raise ValueError(f"Sheet '{tab_name}' is missing required header '{header_name}'.")
+
+    published_col = idx_map["published_id"]
+    target_col = idx_map[header_name]
+
+    col_vals = ws.col_values(published_col)
+    target = str(published_id or "").strip()
+
+    for row_num in range(2, len(col_vals) + 1):
+        if str(col_vals[row_num - 1]).strip() == target:
+            ws.update_cell(row_num, target_col, value or "")
+            return True
+
+    return False
+
+
+def get_published_pdf_by_generator_id(generator_id: str) -> dict | None:
+    """
+    Return the first Published_PDFs row matching generator_id, else None.
+    """
+    if not generator_id or not str(generator_id).strip():
+        return None
+
+    df = read_sheet_as_df(PUBLISHED_PDFS_TAB)
+    if df.empty or "generator_id" not in df.columns:
+        return None
+
+    g = str(generator_id).strip()
+    matches = df[df["generator_id"].astype(str).str.strip() == g]
+
+    if matches.empty:
+        return None
+
+    row = matches.iloc[0].to_dict()
+    return row
+
+
+def get_published_pdf_preview_url_by_generator_id(generator_id: str) -> str | None:
+    row = get_published_pdf_by_generator_id(generator_id)
+    if not row:
+        return None
+
+    preview_url = str(row.get("drive_preview_url", "")).strip()
+    if preview_url:
+        return preview_url
+
+    file_id = str(row.get("drive_file_id", "")).strip()
+    if file_id:
+        return gdrive_urls(file_id)["preview_url"]
+
+    return None
+
 def append_row(sheet_name: str, values: list[Any]):
     ws = get_sheet(sheet_name)
     ws.append_row(values)

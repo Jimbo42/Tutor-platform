@@ -13,6 +13,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
     convert_xor,
 )
+from shared.google_db import get_published_pdf_preview_url_by_generator_id
 
 # ==============================
 # 🔣 SymPy setup (match factoring_practice style)
@@ -126,38 +127,55 @@ def same_operation(pL, pR) -> bool:
     except Exception:
         return False
 
-def detect_same_operation(old_lhs: sp.Expr, old_rhs: sp.Expr, new_lhs: sp.Expr, new_rhs: sp.Expr):
+# def detect_same_operation(old_lhs: sp.Expr, old_rhs: sp.Expr, new_lhs: sp.Expr, new_rhs: sp.Expr):
+#     """
+#     Detects whether the step is:
+#       - add/subtract same term T to both sides
+#       - multiply/divide both sides by same numeric constant C
+#     Returns (ok: bool, op_desc: str or None)
+#     """
+#     try:
+#         # ADD/SUB: new = old + T
+#         dL = sp.simplify(sp.expand(new_lhs - old_lhs))
+#         dR = sp.simplify(sp.expand(new_rhs - old_rhs))
+#         if sp.simplify(dL - dR) == 0:
+#             # same additive change both sides
+#             if sp.simplify(dL) == 0:
+#                 return False, "That didn’t change the equation."
+#             return True, f"Added {sp.sstr(dL)} to both sides."
+#
+#         # MULT/DIV: new = old * C  (numeric constant only)
+#         # Guard: avoid dividing by 0/expressions; allow only numeric constants
+#         if old_lhs == 0 or old_rhs == 0:
+#             # still might be valid, but keep it simple; fall back to equivalence-only
+#             return True, None
+#
+#         rL = sp.simplify(new_lhs / old_lhs)
+#         rR = sp.simplify(new_rhs / old_rhs)
+#
+#         if sp.simplify(rL - rR) == 0 and is_numeric_constant(rL) and sp.simplify(rL) != 0:
+#             return True, f"Multiplied both sides by {sp.sstr(sp.simplify(rL))}."
+#
+#         return False, "Make sure you apply the same operation to BOTH sides (add/subtract the same term, or multiply/divide by the same constant)."
+#     except Exception:
+#         return False, "I couldn’t verify the operation on both sides—check your algebra and parentheses."
+
+def bracket_count(expr: sp.Expr) -> int:
     """
-    Detects whether the step is:
-      - add/subtract same term T to both sides
-      - multiply/divide both sides by same numeric constant C
-    Returns (ok: bool, op_desc: str or None)
+    Count multiplicative bracket groups like a*(...) that still need expansion.
     """
     try:
-        # ADD/SUB: new = old + T
-        dL = sp.simplify(sp.expand(new_lhs - old_lhs))
-        dR = sp.simplify(sp.expand(new_rhs - old_rhs))
-        if sp.simplify(dL - dR) == 0:
-            # same additive change both sides
-            if sp.simplify(dL) == 0:
-                return False, "That didn’t change the equation."
-            return True, f"Added {sp.sstr(dL)} to both sides."
-
-        # MULT/DIV: new = old * C  (numeric constant only)
-        # Guard: avoid dividing by 0/expressions; allow only numeric constants
-        if old_lhs == 0 or old_rhs == 0:
-            # still might be valid, but keep it simple; fall back to equivalence-only
-            return True, None
-
-        rL = sp.simplify(new_lhs / old_lhs)
-        rR = sp.simplify(new_rhs / old_rhs)
-
-        if sp.simplify(rL - rR) == 0 and is_numeric_constant(rL) and sp.simplify(rL) != 0:
-            return True, f"Multiplied both sides by {sp.sstr(sp.simplify(rL))}."
-
-        return False, "Make sure you apply the same operation to BOTH sides (add/subtract the same term, or multiply/divide by the same constant)."
+        count = 0
+        for node in sp.preorder_traversal(expr):
+            if isinstance(node, sp.Mul):
+                args = list(node.args)
+                has_add_child = any(isinstance(arg, sp.Add) for arg in args)
+                has_non_add_child = any(not isinstance(arg, sp.Add) for arg in args)
+                if has_add_child and has_non_add_child:
+                    count += 1
+        return count
     except Exception:
-        return False, "I couldn’t verify the operation on both sides—check your algebra and parentheses."
+        return 0
 
 def additive_term_count(expr: sp.Expr) -> int:
     """
@@ -241,14 +259,15 @@ def parse_op(op_text: str):
     """
     Accepts:
       +expr, -expr, *k, /k
-    where expr may include j (e.g., -j, +2j, +(j-3), +j/2)
-    and k must be a nonzero numeric constant for * and /.
 
-    Returns: (kind, value) where:
-      kind in {"add","mul"}
-      value is a SymPy expr
-        - for add: any SymPy expression (can include j)
-        - for mul: numeric SymPy Number (nonzero). Division becomes mul by 1/k
+    For + / - :
+      the whole string is treated as the additive change.
+      So both of these mean the same thing:
+         +12-8j
+         -8j+12
+
+    For * / :
+      only nonzero numeric constants are allowed.
     """
     if op_text is None:
         return None
@@ -257,39 +276,101 @@ def parse_op(op_text: str):
     if not s:
         return None
 
-    op = s[0]
-    if op not in "+-*/":
+    first = s[0]
+    if first not in "+-*/":
         return None
 
+    # --------------------------
+    # Add/subtract: parse WHOLE expression
+    # --------------------------
+    if first in "+-":
+        expr = parse_user_expr(s)
+        if expr is None:
+            return None
+        return ("add", sp.simplify(expr))
+
+    # --------------------------
+    # Multiply/divide: numeric only
+    # --------------------------
     rhs = s[1:]
     if rhs == "":
         return None
 
-    # Parse the RHS as an expression so it can include j for +/-
-    # Use your existing parse_user_expr helper
     expr = parse_user_expr(rhs)
     if expr is None:
         return None
     expr = sp.simplify(expr)
 
-    if op == "+":
-        return ("add", expr)
+    if not expr.is_number or sp.simplify(expr) == 0:
+        return None
 
-    if op == "-":
-        return ("add", sp.simplify(-expr))
+    if first == "*":
+        return ("mul", expr)
 
-    # For multiply/divide: ONLY allow numeric constants (protects solution sets)
-    if op == "*":
-        if not expr.is_number or sp.simplify(expr) == 0:
-            return None
-        return ("mul", sp.simplify(expr))
-
-    if op == "/":
-        if not expr.is_number or sp.simplify(expr) == 0:
-            return None
+    if first == "/":
         return ("mul", sp.simplify(1 / expr))
 
     return None
+
+def split_linear_terms(expr: sp.Expr):
+    """
+    Split an expression into:
+      j-part, constant-part
+
+    Examples:
+      -8*j - 7   -> (-8*j, -7)
+      12 - 8*j   -> (-8*j, 12)
+      5*j        -> (5*j, 0)
+      -7         -> (0, -7)
+    """
+    expr = sp.expand(sp.simplify(expr))
+    j_part = sp.expand(expr).coeff(j) * j
+    const_part = sp.simplify(expr - j_part)
+    return sp.simplify(j_part), sp.simplify(const_part)
+
+
+def format_signed_term(term: sp.Expr) -> str:
+    """
+    Return latex for a term without unnecessary outer parentheses.
+    """
+    term = sp.simplify(term)
+    return sp.latex(term)
+
+
+def format_additive_step(lhs_expr: sp.Expr, rhs_expr: sp.Expr, add_expr: sp.Expr) -> str:
+    """
+    Display additive steps in a cleaner grouped form.
+
+    If the added expression contains both a j-term and a constant term,
+    show them grouped separately, e.g.
+      (2j-8j) + (7-7) = (8j-8j) + (49-7)
+
+    Otherwise fall back to the simpler whole-expression display.
+    """
+    add_expr = sp.expand(sp.simplify(add_expr))
+    add_j, add_c = split_linear_terms(add_expr)
+
+    lhs_expr = sp.expand(sp.simplify(lhs_expr))
+    rhs_expr = sp.expand(sp.simplify(rhs_expr))
+
+    lhs_j, lhs_c = split_linear_terms(lhs_expr)
+    rhs_j, rhs_c = split_linear_terms(rhs_expr)
+
+    has_j = sp.simplify(add_j) != 0
+    has_c = sp.simplify(add_c) != 0
+
+    # If both parts are present, show grouped like-terms together
+    if has_j and has_c:
+        lhs_txt = f"({format_signed_term(lhs_j)}{format_signed_term(add_j) if str(format_signed_term(add_j)).startswith('-') else '+' + format_signed_term(add_j)}) + ({format_signed_term(lhs_c)}{format_signed_term(add_c) if str(format_signed_term(add_c)).startswith('-') else '+' + format_signed_term(add_c)})"
+        rhs_txt = f"({format_signed_term(rhs_j)}{format_signed_term(add_j) if str(format_signed_term(add_j)).startswith('-') else '+' + format_signed_term(add_j)}) + ({format_signed_term(rhs_c)}{format_signed_term(add_c) if str(format_signed_term(add_c)).startswith('-') else '+' + format_signed_term(add_c)})"
+        return lhs_txt + " = " + rhs_txt
+
+    # Otherwise keep the normal whole-expression display
+    return (
+        f"({sp.latex(lhs_expr)}) + ({sp.latex(add_expr)})"
+        + " = "
+        + f"({sp.latex(rhs_expr)}) + ({sp.latex(add_expr)})"
+    )
 
 def apply_op(expr: sp.Expr, parsed_op):
     kind, k = parsed_op
@@ -306,54 +387,82 @@ def parse_equation_text(eq_text: str):
       2(j+3)=14
       j/4 + 2 = 5
 
-    Returns: (lhs_expr, rhs_expr) or (None, None)
+    Returns:
+      (lhs_raw, rhs_raw, lhs_norm, rhs_norm)
+    where:
+      - raw keeps the student's structural form
+      - norm is simplify(expand(...)) for checking/equivalence
     """
     if eq_text is None:
-        return None, None
+        return None, None, None, None
 
     s = eq_text.strip()
     if not s:
-        return None, None
+        return None, None, None, None
 
     s = s.replace("＝", "=").replace("−", "-").replace("–", "-")
 
     if "=" not in s:
-        return None, None
+        return None, None, None, None
 
     parts = s.split("=")
     if len(parts) != 2:
-        return None, None
+        return None, None, None, None
 
     lhs_txt = parts[0].strip()
     rhs_txt = parts[1].strip()
 
     if not lhs_txt or not rhs_txt:
-        return None, None
+        return None, None, None, None
 
-    lhs = parse_user_expr(lhs_txt)
-    rhs = parse_user_expr(rhs_txt)
+    lhs_raw = parse_user_expr(lhs_txt)
+    rhs_raw = parse_user_expr(rhs_txt)
 
-    if lhs is None or rhs is None:
-        return None, None
+    if lhs_raw is None or rhs_raw is None:
+        return None, None, None, None
 
     try:
-        return sp.simplify(sp.expand(lhs)), sp.simplify(sp.expand(rhs))
+        lhs_norm = sp.simplify(sp.expand(lhs_raw))
+        rhs_norm = sp.simplify(sp.expand(rhs_raw))
     except Exception:
-        return lhs, rhs
+        lhs_norm = lhs_raw
+        rhs_norm = rhs_raw
 
+    return lhs_raw, rhs_raw, lhs_norm, rhs_norm
 
-def equation_changed(old_lhs: sp.Expr, old_rhs: sp.Expr, new_lhs: sp.Expr, new_rhs: sp.Expr) -> bool:
+def equation_changed(display_lhs: sp.Expr, display_rhs: sp.Expr, new_lhs_raw: sp.Expr, new_rhs_raw: sp.Expr) -> bool:
+    """
+    Accept a new direct-equation entry if it changes the displayed line,
+    even when it is algebraically equivalent to the normalized current state.
+    """
     try:
-        return not (
-            sp.simplify(old_lhs - new_lhs) == 0
-            and sp.simplify(old_rhs - new_rhs) == 0
-        )
+        old_lhs_key = sp.srepr(display_lhs)
+        old_rhs_key = sp.srepr(display_rhs)
+        new_lhs_key = sp.srepr(new_lhs_raw)
+        new_rhs_key = sp.srepr(new_rhs_raw)
+
+        return not (old_lhs_key == new_lhs_key and old_rhs_key == new_rhs_key)
     except Exception:
         return True
 
-
 def normalized_equation_latex(lhs: sp.Expr, rhs: sp.Expr) -> str:
     return sp.latex(sp.simplify(sp.expand(lhs))) + " = " + sp.latex(sp.simplify(sp.expand(rhs)))
+
+def solving_equation_generator_id(level: int) -> str:
+    return f"solving_eq_l{int(level)}"
+
+def build_bracket_expr(a: int, b: int, c: int = 0):
+    """
+    Build a*(j + b) + c without automatic expansion,
+    so the brackets display properly.
+    """
+    inner = sp.Add(j, sp.Integer(b), evaluate=False)
+    prod = sp.Mul(sp.Integer(a), inner, evaluate=False)
+
+    if c == 0:
+        return prod
+
+    return sp.Add(prod, sp.Integer(c), evaluate=False)
 
 # ==============================
 # 🧩 Generators (Linear equations; multiple levels)
@@ -391,7 +500,7 @@ def gen_level_3():
     return {"name": "Level 3 — aj + b = dj + e", "lhs": lhs, "rhs": rhs, "sol": sp.Integer(sol)}
 
 def gen_level_4():
-    # a(j + b) + c = d(j + e) + f
+    # a(j + b) + c = d(j + e) + f   (keep brackets visible)
     a = nz_int(2, 9)
     d = nz_int(2, 9, exclude=[a])
     sol = random.randint(-9, 9)
@@ -400,13 +509,19 @@ def gen_level_4():
     e = random.randint(-8, 8)
     c = random.randint(-12, 12)
 
-    # Choose f so sol works
-    # a(sol+b)+c = d(sol+e)+f  => f = a(sol+b)+c - d(sol+e)
-    f = a*(sol + b) + c - d*(sol + e)
+    # Choose f so sol works:
+    # a(sol+b)+c = d(sol+e)+f  =>  f = a(sol+b)+c - d(sol+e)
+    f = a * (sol + b) + c - d * (sol + e)
 
-    lhs = a*(j + b) + c
-    rhs = d*(j + e) + sp.Integer(f)
-    return {"name": "Level 4 — brackets both sides", "lhs": lhs, "rhs": rhs, "sol": sp.Integer(sol)}
+    lhs = build_bracket_expr(a, b, c)
+    rhs = build_bracket_expr(d, e, f)
+
+    return {
+        "name": "Level 4 — brackets both sides",
+        "lhs": lhs,
+        "rhs": rhs,
+        "sol": sp.Integer(sol),
+    }
 
 GENERATORS = {
     1: ("Level 1 — aj + b = c", gen_level_1),
@@ -414,6 +529,154 @@ GENERATORS = {
     3: ("Level 3 — aj + b = dj + e", gen_level_3),
     4: ("Level 4 — a(j+b)+c = d(j+e)+f", gen_level_4),
 }
+
+# ==============================
+# 💡 Hint System
+# ==============================
+def build_hints_level_1(q):
+    lhs = sp.simplify(sp.expand(q["current_lhs"]))
+    rhs = sp.simplify(sp.expand(q["current_rhs"]))
+
+    hints = [
+        "Your goal is to isolate j.",
+        "First remove any constant term from the side containing j.",
+        "Then divide or multiply so the coefficient of j becomes 1.",
+    ]
+
+    if lhs.has(j) and not rhs.has(j):
+        terms = additive_term_count(lhs)
+        coeff = sp.expand(lhs).coeff(j)
+        const = sp.simplify(lhs - coeff * j)
+
+        if terms > 1 and const != 0:
+            hints.insert(1, f"On the left side, remove the constant term {sp.sstr(const)} first.")
+        elif coeff not in (0, 1):
+            hints.insert(1, f"After isolating the j-term, divide both sides by {sp.sstr(coeff)}.")
+
+    elif rhs.has(j) and not lhs.has(j):
+        terms = additive_term_count(rhs)
+        coeff = sp.expand(rhs).coeff(j)
+        const = sp.simplify(rhs - coeff * j)
+
+        if terms > 1 and const != 0:
+            hints.insert(1, f"On the right side, remove the constant term {sp.sstr(const)} first.")
+        elif coeff not in (0, 1):
+            hints.insert(1, f"After isolating the j-term, divide both sides by {sp.sstr(coeff)}.")
+
+    return hints
+
+
+def build_hints_level_2(q):
+    lhs = q.get("display_lhs", q["current_lhs"])
+    rhs = q.get("display_rhs", q["current_rhs"])
+
+    hints = [
+        "Your goal is to isolate j.",
+        "Start by removing the bracket using the distributive property, or undo the outer multiplication if possible.",
+        "After simplifying, remove constants and then divide by the coefficient of j.",
+    ]
+
+    brackets = bracket_count(lhs) + bracket_count(rhs)
+    if brackets > 0:
+        hints.insert(1, "There are still brackets to expand or undo.")
+
+    return hints
+
+
+def build_hints_level_3(q):
+    lhs = sp.simplify(sp.expand(q["current_lhs"]))
+    rhs = sp.simplify(sp.expand(q["current_rhs"]))
+
+    hints = [
+        "Get all j-terms onto one side and all constants onto the other side.",
+        "Use addition or subtraction first to move one variable term across the equals sign.",
+        "Then combine like terms.",
+        "Finally divide by the coefficient of j.",
+    ]
+
+    if lhs.has(j) and rhs.has(j):
+        hints.insert(1, "Right now j appears on both sides, so your next step should move one j-term across.")
+
+    return hints
+
+
+def build_hints_level_4(q):
+    lhs_d = q.get("display_lhs", q["current_lhs"])
+    rhs_d = q.get("display_rhs", q["current_rhs"])
+    lhs = sp.simplify(sp.expand(q["current_lhs"]))
+    rhs = sp.simplify(sp.expand(q["current_rhs"]))
+
+    hints = [
+        "Start by simplifying both sides.",
+        "Expanding brackets is usually the best first move here.",
+        "After expanding, collect j-terms on one side and constants on the other.",
+        "Then divide by the final coefficient of j.",
+    ]
+
+    brackets = bracket_count(lhs_d) + bracket_count(rhs_d)
+    if brackets > 0:
+        hints.insert(1, "There are still brackets showing, so expanding is likely a helpful next step.")
+
+    if lhs.has(j) and rhs.has(j) and brackets == 0:
+        hints.insert(1, "After simplifying, move one j-term across the equals sign.")
+
+    return hints
+
+
+HINT_BUILDERS = {
+    1: build_hints_level_1,
+    2: build_hints_level_2,
+    3: build_hints_level_3,
+    4: build_hints_level_4,
+}
+
+def build_hints_for_question(q):
+    builder = HINT_BUILDERS.get(q["level"])
+    if not builder:
+        return []
+    return builder(q)
+
+
+def get_equation_reactive_hint(q, old_lhs, old_rhs, new_lhs, new_rhs, old_display_lhs=None, old_display_rhs=None, new_lhs_raw=None, new_rhs_raw=None):
+    """
+    Return a short adaptive message similar to factoring_practice.
+    """
+    try:
+        old_prog = measure_progress(old_lhs, old_rhs)
+        new_prog = measure_progress(new_lhs, new_rhs)
+
+        old_display_lhs = old_display_lhs if old_display_lhs is not None else old_lhs
+        old_display_rhs = old_display_rhs if old_display_rhs is not None else old_rhs
+        new_lhs_raw = new_lhs_raw if new_lhs_raw is not None else new_lhs
+        new_rhs_raw = new_rhs_raw if new_rhs_raw is not None else new_rhs
+
+        old_brackets = bracket_count(old_display_lhs) + bracket_count(old_display_rhs)
+        new_brackets = bracket_count(new_lhs_raw) + bracket_count(new_rhs_raw)
+
+        if new_brackets < old_brackets:
+            return "Good step. Expanding brackets helps simplify the equation."
+
+        if new_prog["isolated"]:
+            return "Nice — j is isolated now."
+
+        if new_prog["j_presence"] < old_prog["j_presence"]:
+            return "Good step. You moved j off one side of the equation."
+
+        if new_prog.get("j_side_terms", 999) < old_prog.get("j_side_terms", 999):
+            return "Good step. The side containing j is becoming simpler."
+
+        if new_prog["deg_sum"] < old_prog["deg_sum"]:
+            return "Good step. The equation is simpler now."
+
+        if old_prog["j_presence"] == 2 and new_prog["j_presence"] == 2:
+            return "Equivalent step, but try moving all j-terms to one side."
+
+        if new_prog["j_presence"] == 1 and not new_prog["isolated"]:
+            return "Equivalent step, but try removing the constant term next."
+
+        return "Equivalent step, but try isolating j."
+    except Exception:
+        return "Equivalent step, but try isolating j."
 
 # ==============================
 # 🧠 Session Engine
@@ -425,19 +688,32 @@ def start_equations_session(num_questions, levels):
         _, gen = GENERATORS[lvl]
         g = gen()
 
+        lesson_preview_url = get_published_pdf_preview_url_by_generator_id(
+            solving_equation_generator_id(lvl)
+        )
+
         qs.append({
             "level": lvl,
             "level_name": g["name"],
+            "lesson_preview_url": lesson_preview_url,
             "start_lhs": g["lhs"],
             "start_rhs": g["rhs"],
             "target_sol": g["sol"],
 
-            "current_lhs": g["lhs"],
-            "current_rhs": g["rhs"],
+            "current_lhs": sp.simplify(sp.expand(g["lhs"])),
+            "current_rhs": sp.simplify(sp.expand(g["rhs"])),
+
+            "display_lhs": g["lhs"],
+            "display_rhs": g["rhs"],
 
             "attempts": 0,
-            "hints_used": 0,     # placeholder for later if you want hints
-            "steps": [],         # list of {"lhs":, "rhs":, "text_lhs":, "text_rhs":}
+            "hints_used": 0,
+            "available_hints": None,
+            "hints_shown": [],
+            "hint_index": 0,
+            "hint_view_index": -1,
+
+            "steps": [],
             "last_message": "",
             "correct": False,
             "first_try_correct": False,
@@ -452,6 +728,13 @@ def start_equations_session(num_questions, levels):
         "current": 0,
         "finished": False,
     }
+
+import streamlit.components.v1 as components
+
+@st.dialog("📘 Reference Lesson", width="large")
+def open_reference_pdf_dialog(title: str, preview_url: str):
+    st.subheader(title)
+    components.iframe(preview_url, height=700, scrolling=True)
 
 # ==============================
 # 🖥️ UI
@@ -470,9 +753,9 @@ def solving_equations_practice():
     }
     .eq-title{
       text-align:center;
-      font-size:18px;
+      font-size:16px;
       font-weight:500;
-      margin: 0.15rem 0 0.15rem 0;
+      margin: 0.02rem 0 0.02rem 0;
       opacity: 0.92;
     }
     .eq-latex-center .katex-display{
@@ -503,8 +786,10 @@ def solving_equations_practice():
     </style>
     """, unsafe_allow_html=True)
 
-    st.markdown("## 🧮 Solving Equations Practice")
-
+    st.markdown(
+        "<div style='font-size:1.58rem; line-height:1.15; font-weight:700; margin:0.6rem 0 0.15rem 0; padding-top:0.1rem;'>🧮 Solving Equations Practice</div>",
+        unsafe_allow_html=True
+    )
     # ----------------------------
     # Session init
     # ----------------------------
@@ -586,13 +871,33 @@ def solving_equations_practice():
     qs = ss.equations["questions"]
     q = qs[idx]
 
-    q_col, r_col = st.columns([8, 2], vertical_alignment="center")
+    if q.get("available_hints") is None:
+        q["available_hints"] = build_hints_for_question(q)
+
+    q_col, r_col = st.columns([8.5, 1.8], vertical_alignment="top")
 
     with q_col:
-        st.markdown(f"### Question {idx + 1} of {len(qs)}")
+        st.markdown(
+            f"<div style='font-size:1.15rem; font-weight:700; margin:0 0 -0.35rem 0;'>Question {idx + 1} of {len(qs)}</div>",
+            unsafe_allow_html=True
+        )
         st.caption(q["level_name"])
 
+        lesson_preview_url = q.get("lesson_preview_url")
+
+        if lesson_preview_url:
+            lesson_cols = st.columns([1.2, 5])
+            with lesson_cols[0]:
+                if st.button("📘 View Lesson", key=f"eq_lesson_{idx}", width="stretch"):
+                    open_reference_pdf_dialog(
+                        f"Reference Lesson — {q['level_name']}",
+                        lesson_preview_url
+                    )
+            with lesson_cols[1]:
+                st.caption("Open the lesson for this question type.")
+
     with r_col:
+        st.markdown("<div style='margin-top:-0.15rem;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Restart", key=f"restart_top_{idx}", width="stretch"):
             ss.equations = None
             ss.eq_setup_open = True
@@ -625,245 +930,348 @@ def solving_equations_practice():
         return  # IMPORTANT: stop rendering the rest of the UI
 
     # ----------------------------
-    # Working Display
+    # Original + Working + Help Layout
     # ----------------------------
-    st.markdown("### ✏️ Working")
+    st.markdown("<div style='margin-top:-0.8rem;'></div>", unsafe_allow_html=True)
 
-    if q.get("last_message"):
-        st.info(q["last_message"])
+    main_left, main_right = st.columns([1.65, 1.0], vertical_alignment="top")
 
-    # ----------------------------
-    # Original (centered)
-    # ----------------------------
-    c1, c2, c3 = st.columns([1, 3, 1])
-    with c2:
+    # ==================================
+    # LEFT COLUMN
+    # ==================================
+    with main_left:
+        # ---------- Original ----------
         st.markdown(
-            "<div style='text-align:center; margin-bottom:-0.8rem;'><strong>Original</strong></div>",
+            "<div style='text-align:center; font-size:1.18rem; font-weight:700; margin:-0.1rem 0 -0.8rem 0;'>Original</div>",
             unsafe_allow_html=True
         )
         st.latex(f"{sp.latex(q['start_lhs'])} = {sp.latex(q['start_rhs'])}")
 
-    # ----------------------------
-    # Current (centered)
-    # ----------------------------
-    c1, c2, c3 = st.columns([1, 3, 1])
-    with c2:
+        # ---------- Working ----------
         st.markdown(
-            "<div style='text-align:center; margin-bottom:-0.8rem;'><strong>Current</strong></div>",
+            "<div style='text-align:center; font-size:1.28rem; font-weight:700; margin:0.55rem 0 0.1rem 0;'>✏️ Working</div>",
             unsafe_allow_html=True
         )
+
+        if q.get("last_message"):
+            st.info(q["last_message"])
 
         if q["steps"]:
             for step in q["steps"]:
                 if step.get("op_display"):
                     st.latex(step["op_display"])
                 st.latex(step["result_display"])
-        else:
-            st.latex(f"{sp.latex(q['current_lhs'])} = {sp.latex(q['current_rhs'])}")
 
-    # =============================
-    # ✍️ STEP ENTRY ROW
-    # =============================
-    st.markdown("<div class='eq-title'>Enter your next step</div>", unsafe_allow_html=True)
-    st.markdown("<div class='eq-card'>", unsafe_allow_html=True)
-
-    # Read current values from session-state if already present
-    left_key = f"eq_opL_{ss.eq_input_version}"
-    mid_key = f"eq_full_{ss.eq_input_version}"
-    right_key = f"eq_opR_{ss.eq_input_version}"
-
-    left_val = ss.get(left_key, "")
-    mid_val = ss.get(mid_key, "")
-    right_val = ss.get(right_key, "")
-
-    side_has_text = bool((left_val or "").strip() or (right_val or "").strip())
-    middle_has_text = bool((mid_val or "").strip())
-
-    cap1, cap2, cap3 = st.columns([2.4, 4.2, 2.4], vertical_alignment="bottom")
-    with cap1:
-        st.caption("Left-side operation")
-    with cap2:
-        st.caption("Next full equation")
-    with cap3:
-        st.caption("Right-side operation")
-
-    colL, colM, colR = st.columns([2.4, 4.2, 2.4], vertical_alignment="center")
-
-    with colL:
-        op_left = st.text_input(
-            "Left operation",
-            key=left_key,
-            label_visibility="collapsed",
-            placeholder="+5  or  /3",
-            autocomplete="off",
-            disabled=middle_has_text,
+        # ---------- Entry row ----------
+        st.markdown(
+            "<div class='eq-title' style='margin:0.35rem 0 -0.02rem 0;'>Enter your next step</div>",
+            unsafe_allow_html=True
         )
+        st.markdown("<div class='eq-card'>", unsafe_allow_html=True)
 
-    with colM:
-        eq_text = st.text_input(
-            "Next equation",
-            key=mid_key,
-            label_visibility="collapsed",
-            placeholder="Example: 3j = -9",
-            autocomplete="off",
-            disabled=side_has_text,
-        )
+        left_key = f"eq_opL_{ss.eq_input_version}"
+        mid_key = f"eq_full_{ss.eq_input_version}"
+        right_key = f"eq_opR_{ss.eq_input_version}"
 
-    with colR:
-        op_right = st.text_input(
-            "Right operation",
-            key=right_key,
-            label_visibility="collapsed",
-            placeholder="+5  or  /3",
-            autocomplete="off",
-            disabled=middle_has_text,
-        )
+        left_val = ss.get(left_key, "")
+        mid_val = ss.get(mid_key, "")
+        right_val = ss.get(right_key, "")
 
-    help1, help2, help3 = st.columns([2.4, 4.2, 2.4], vertical_alignment="top")
-    with help1:
-        st.caption("Same operation as right side")
-    with help2:
-        st.caption("Enter the whole next equivalent equation")
-    with help3:
-        st.caption("Same operation as left side")
+        side_has_text = bool((left_val or "").strip() or (right_val or "").strip())
+        middle_has_text = bool((mid_val or "").strip())
 
-    submit_col = st.columns([3, 2, 3])[1]
-    with submit_col:
-        if st.button("✅ Submit", key=f"eq_submit_{idx}_{ss.eq_input_version}", width="stretch"):
+        cap1, cap2, cap3 = st.columns([2.4, 4.2, 2.4], vertical_alignment="bottom")
+        with cap1:
+            st.caption("LS")
+        with cap2:
+            st.caption("Next full equation")
+        with cap3:
+            st.caption("RS")
 
-            left_txt = (op_left or "").strip()
-            mid_txt = (eq_text or "").strip()
-            right_txt = (op_right or "").strip()
+        colL, colM, colR = st.columns([2.4, 4.2, 2.4], vertical_alignment="center")
 
-            using_ops = bool(left_txt or right_txt)
-            using_equation = bool(mid_txt)
-
-            if using_ops and using_equation:
-                q["attempts"] += 1
-                q["last_message"] = "❌ Use either the side operations or the full equation entry, not both."
-                ss.eq_input_version += 1
-                st.rerun()
-
-            if not using_ops and not using_equation:
-                q["attempts"] += 1
-                q["last_message"] = "❌ Enter a step before submitting."
-                ss.eq_input_version += 1
-                st.rerun()
-
-            old_lhs = q["current_lhs"]
-            old_rhs = q["current_rhs"]
-
-            # ---------------------------------
-            # Path A: operation on both sides
-            # ---------------------------------
-            if using_ops:
-                pL = parse_op(left_txt)
-                pR = parse_op(right_txt)
-
-                if pL is None or pR is None:
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ Use +expr or -expr, or *k /k where k is a nonzero number."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                if not same_operation(pL, pR):
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ Operations must match on both sides."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                new_lhs = apply_op(old_lhs, pL)
-                new_rhs = apply_op(old_rhs, pL)
-
-                if sp.simplify(new_lhs - old_lhs) == 0 and sp.simplify(new_rhs - old_rhs) == 0:
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ That didn’t change the equation."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                kind, k = pL
-                k = sp.simplify(k)
-
-                if kind == "add":
-                    op_display = (
-                        f"({sp.latex(old_lhs)}) + ({sp.latex(k)})"
-                        + " = "
-                        + f"({sp.latex(old_rhs)}) + ({sp.latex(k)})"
-                    )
-                else:
-                    op_display = (
-                        f"({sp.latex(old_lhs)}) \\cdot ({sp.latex(k)})"
-                        + " = "
-                        + f"({sp.latex(old_rhs)}) \\cdot ({sp.latex(k)})"
-                    )
-
-                result_display = normalized_equation_latex(new_lhs, new_rhs)
-
-                q["steps"].append({
-                    "op_display": op_display,
-                    "result_display": result_display,
-                    "op_text": left_txt,
-                })
-
-            # ---------------------------------
-            # Path B: full next equation
-            # ---------------------------------
-            else:
-                new_lhs, new_rhs = parse_equation_text(mid_txt)
-
-                if new_lhs is None or new_rhs is None:
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ Enter a full equation such as 3j = -9."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                if not equation_changed(old_lhs, old_rhs, new_lhs, new_rhs):
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ That didn’t change the equation."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                if not equivalent_equations(old_lhs, old_rhs, new_lhs, new_rhs):
-                    q["attempts"] += 1
-                    q["last_message"] = "❌ That new equation is not equivalent to the current one."
-                    ss.eq_input_version += 1
-                    st.rerun()
-
-                q["steps"].append({
-                    "op_display": sp.latex(old_lhs) + " = " + sp.latex(old_rhs),
-                    "result_display": normalized_equation_latex(new_lhs, new_rhs),
-                    "op_text": mid_txt,
-                })
-
-            q["current_lhs"] = new_lhs
-            q["current_rhs"] = new_rhs
-
-            # Check solved
-            val = solved_value_if_isolated(new_lhs, new_rhs)
-            if val is not None and sp.simplify(val - q["target_sol"]) == 0:
-                q["correct"] = True
-                val_s = sp.simplify(val)
-                q["solved_line_latex"] = r"j = " + sp.latex(val_s)
-                q["steps"] = []
-                q["last_message"] = ""
-                if q["attempts"] == 0:
-                    q["first_try_correct"] = True
-                ss.eq_input_version += 1
-                st.rerun()
-
-            old_prog = measure_progress(old_lhs, old_rhs)
-            new_prog = measure_progress(new_lhs, new_rhs)
-
-            helpful = (
-                new_prog["isolated"]
-                or new_prog["j_presence"] < old_prog["j_presence"]
-                or new_prog["deg_sum"] < old_prog["deg_sum"]
-                or new_prog.get("j_side_terms", 999) < old_prog.get("j_side_terms", 999)
+        with colL:
+            op_left = st.text_input(
+                "Left operation",
+                key=left_key,
+                label_visibility="collapsed",
+                autocomplete="off",
+                disabled=middle_has_text,
             )
 
-            q["last_message"] = ("✅ Good step." if helpful else "🧠 Equivalent step, but try isolating j.")
+        with colM:
+            eq_text = st.text_input(
+                "Next equation",
+                key=mid_key,
+                label_visibility="collapsed",
+                autocomplete="off",
+                disabled=side_has_text,
+            )
+
+        with colR:
+            op_right = st.text_input(
+                "Right operation",
+                key=right_key,
+                label_visibility="collapsed",
+                autocomplete="off",
+                disabled=middle_has_text,
+            )
+
+        help1, help2, help3 = st.columns([2.4, 4.2, 2.4], vertical_alignment="top")
+        with help1:
+            st.caption("LS: Operation. eg. +5 or /3")
+        with help2:
+            st.caption("Enter the whole next equivalent equation")
+        with help3:
+            st.caption("RS: Operation. eg. +5 or /3")
+
+        submit_col = st.columns([3, 2, 3])[1]
+        with submit_col:
+            submitted = st.button(
+                "✅ Submit",
+                key=f"eq_submit_{idx}_{ss.eq_input_version}",
+                width="stretch"
+            )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ==================================
+    # RIGHT COLUMN  (Factoring-style help)
+    # ==================================
+    with main_right:
+        st.markdown(
+            f"<div style='text-align:left; font-size:1.00rem; font-weight:500; margin:0.15rem 0 0.4rem 0;'>💡 Hints used: {q.get('hints_used', 0)}</div>",
+            unsafe_allow_html=True
+        )
+
+        hints = q.get("available_hints") or build_hints_for_question(q)
+        shown = q.get("hints_shown", [])
+        view_i = q.get("hint_view_index", -1)
+
+        nav1, nav2, nav3 = st.columns([1.1, 1.7, 1.1], vertical_alignment="center")
+
+        with nav1:
+            prev_disabled = len(shown) == 0 or view_i <= 0
+            if st.button("◀", key=f"eq_hint_prev_{idx}", disabled=prev_disabled, width="stretch"):
+                q["hint_view_index"] = max(0, view_i - 1)
+                st.rerun()
+
+        with nav2:
+            total_hints = len(hints)
+            shown_count = len(shown)
+            if shown_count == 0:
+                st.caption(f"Hint 0 of {total_hints}")
+            else:
+                st.caption(f"Hint {view_i + 1} of {shown_count}")
+
+        with nav3:
+            next_disabled = len(hints) == 0 or (len(shown) >= len(hints) and view_i >= len(shown) - 1)
+            if st.button("▶", key=f"eq_hint_next_{idx}", disabled=next_disabled, width="stretch"):
+                if len(shown) < len(hints):
+                    q["hints_shown"].append("💡 " + hints[len(shown)])
+                    q["hint_index"] = len(q["hints_shown"])
+                    q["hint_view_index"] = len(q["hints_shown"]) - 1
+                    q["hints_used"] = len(q["hints_shown"])
+                else:
+                    q["hint_view_index"] = min(len(shown) - 1, view_i + 1)
+                st.rerun()
+
+        if len(shown) == 0:
+            st.markdown(
+                """
+                <div style="
+                    background: rgba(219, 234, 254, 0.35);
+                    border: 1px dashed rgba(147, 197, 253, 0.9);
+                    border-radius: 14px;
+                    padding: 14px 16px;
+                    color: #4b5563;
+                    line-height: 1.55;
+                    min-height: 120px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    text-align: center;
+                    margin-top: 0.15rem;
+                ">
+                    <div style="font-size: 1.0rem;">Click ▶ to reveal the first hint.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        elif 0 <= view_i < len(shown):
+            st.markdown(
+                f"""
+                <div style="
+                    background: rgba(219, 234, 254, 0.78);
+                    border: 1px solid rgba(147, 197, 253, 0.95);
+                    border-radius: 14px;
+                    padding: 14px 16px;
+                    color: #0f4c81;
+                    line-height: 1.55;
+                    min-height: 120px;
+                    display: flex;
+                    align-items: flex-start;
+                    margin-top: 0.15rem;
+                ">
+                    <div style="font-size: 1.05rem;">{shown[view_i]}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # =============================
+    # SUBMIT HANDLER
+    # =============================
+    if submitted:
+
+        left_txt = (op_left or "").strip()
+        mid_txt = (eq_text or "").strip()
+        right_txt = (op_right or "").strip()
+
+        using_ops = bool(left_txt or right_txt)
+        using_equation = bool(mid_txt)
+
+        if using_ops and using_equation:
             q["attempts"] += 1
+            q["last_message"] = "❌ Use either the side operations or the full equation entry, not both."
+            st.rerun()
+
+        if not using_ops and not using_equation:
+            q["attempts"] += 1
+            q["last_message"] = "❌ Enter a step before submitting."
+            st.rerun()
+
+        old_lhs = q["current_lhs"]
+        old_rhs = q["current_rhs"]
+        old_display_lhs = q.get("display_lhs", old_lhs)
+        old_display_rhs = q.get("display_rhs", old_rhs)
+
+        # ---------------------------------
+        # Path A: operation on both sides
+        # ---------------------------------
+        if using_ops:
+            pL = parse_op(left_txt)
+            pR = parse_op(right_txt)
+
+            if pL is None or pR is None:
+                q["attempts"] += 1
+                q["last_message"] = "❌ Use +expr or -expr, or *k /k where k is a nonzero number."
+                st.rerun()
+
+            if not same_operation(pL, pR):
+                q["attempts"] += 1
+                q["last_message"] = "❌ Operations must match on both sides."
+                st.rerun()
+
+            new_lhs_raw = apply_op(old_display_lhs, pL)
+            new_rhs_raw = apply_op(old_display_rhs, pL)
+
+            new_lhs = sp.simplify(sp.expand(new_lhs_raw))
+            new_rhs = sp.simplify(sp.expand(new_rhs_raw))
+
+            if sp.simplify(new_lhs - old_lhs) == 0 and sp.simplify(new_rhs - old_rhs) == 0:
+                q["attempts"] += 1
+                q["last_message"] = "❌ That didn’t change the equation."
+                st.rerun()
+
+            kind, k = pL
+            k = sp.simplify(k)
+
+            if kind == "add":
+                op_display = format_additive_step(old_display_lhs, old_display_rhs, k)
+            else:
+                op_display = (
+                    f"({sp.latex(old_display_lhs)}) \\cdot ({sp.latex(k)})"
+                    + " = "
+                    + f"({sp.latex(old_display_rhs)}) \\cdot ({sp.latex(k)})"
+                )
+
+            result_display = sp.latex(new_lhs_raw) + " = " + sp.latex(new_rhs_raw)
+
+            q["steps"].append({
+                "op_display": op_display,
+                "result_display": result_display,
+                "op_text": left_txt,
+            })
+
+            q["display_lhs"] = new_lhs_raw
+            q["display_rhs"] = new_rhs_raw
+            q["current_lhs"] = new_lhs
+            q["current_rhs"] = new_rhs
+            q["available_hints"] = build_hints_for_question(q)
+
+        # ---------------------------------
+        # Path B: full next equation
+        # ---------------------------------
+        else:
+            new_lhs_raw, new_rhs_raw, new_lhs, new_rhs = parse_equation_text(mid_txt)
+
+            if new_lhs_raw is None or new_rhs_raw is None:
+                q["attempts"] += 1
+                q["last_message"] = "❌ Enter a full equation such as 3j = -9."
+                st.rerun()
+
+            if not equation_changed(old_display_lhs, old_display_rhs, new_lhs_raw, new_rhs_raw):
+                q["attempts"] += 1
+                q["last_message"] = "❌ That didn’t change the equation."
+                st.rerun()
+
+            if not equivalent_equations(old_lhs, old_rhs, new_lhs, new_rhs):
+                q["attempts"] += 1
+                q["last_message"] = "❌ That new equation is not equivalent to the current one."
+                st.rerun()
+
+            q["steps"].append({
+                "op_display": "",
+                "result_display": sp.latex(new_lhs_raw) + " = " + sp.latex(new_rhs_raw),
+                "op_text": mid_txt,
+            })
+
+            q["display_lhs"] = new_lhs_raw
+            q["display_rhs"] = new_rhs_raw
+            q["current_lhs"] = new_lhs
+            q["current_rhs"] = new_rhs
+            q["available_hints"] = build_hints_for_question(q)
+
+        val = solved_value_if_isolated(new_lhs, new_rhs)
+        if val is not None and sp.simplify(val - q["target_sol"]) == 0:
+            q["correct"] = True
+            val_s = sp.simplify(val)
+            q["solved_line_latex"] = r"j = " + sp.latex(val_s)
+            q["steps"] = []
+            q["last_message"] = ""
+            if q["attempts"] == 0:
+                q["first_try_correct"] = True
             ss.eq_input_version += 1
             st.rerun()
+
+        old_prog = measure_progress(old_lhs, old_rhs)
+        new_prog = measure_progress(new_lhs, new_rhs)
+
+        old_brackets = bracket_count(old_display_lhs) + bracket_count(old_display_rhs)
+        new_brackets = bracket_count(new_lhs_raw) + bracket_count(new_rhs_raw)
+
+        helpful = (
+            new_prog["isolated"]
+            or new_prog["j_presence"] < old_prog["j_presence"]
+            or new_prog["deg_sum"] < old_prog["deg_sum"]
+            or new_prog.get("j_side_terms", 999) < old_prog.get("j_side_terms", 999)
+            or new_brackets < old_brackets
+        )
+
+        reactive = get_equation_reactive_hint(
+            q,
+            old_lhs, old_rhs,
+            new_lhs, new_rhs,
+            old_display_lhs=old_display_lhs,
+            old_display_rhs=old_display_rhs,
+            new_lhs_raw=new_lhs_raw,
+            new_rhs_raw=new_rhs_raw,
+        )
+
+        q["last_message"] = ("✅ " + reactive) if helpful else ("🧠 " + reactive)
+        q["attempts"] += 1
+        ss.eq_input_version += 1
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
