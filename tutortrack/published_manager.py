@@ -38,6 +38,7 @@ REFERENCE_GENERATOR_IDS = [
     ("solving_eq_l2", "Solving Equations - Level 2"),
     ("solving_eq_l3", "Solving Equations - Level 3"),
     ("solving_eq_l4", "Solving Equations - Level 4"),
+    ("solving_eq_l5", "Solving Equations - Level 5"),
     ("factoring_l1", "Factoring - Level 1"),
     ("factoring_l2", "Factoring - Level 2"),
     ("factoring_l3", "Factoring - Level 3"),

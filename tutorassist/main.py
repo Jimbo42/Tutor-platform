@@ -130,6 +130,7 @@ pages = {
     ],
     "Tools": [
         st.Page("chemistry_a.py", title="Chemistry Calculator"),
+        st.Page("physics_a.py", title="Vector Calculator"),
     ],
 }
 

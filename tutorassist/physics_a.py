@@ -1,0 +1,3 @@
+from shared.vector_workbench import render_vector_workbench
+
+render_vector_workbench()

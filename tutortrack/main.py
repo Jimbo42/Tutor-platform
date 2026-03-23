@@ -64,6 +64,7 @@ pages = {
     ],
     "Tools": [
         st.Page("chemistry.py", title="Chemistry"),
+        st.Page("physics.py", title="Vectors"),
         st.Page("configuration.py", title="Configuration"),
     ],
     "Reports": [

@@ -236,24 +236,66 @@ def measure_progress(lhs: sp.Expr, rhs: sp.Expr):
     except Exception:
         return {"isolated": False, "j_presence": 2, "deg_sum": 2, "j_side_terms": 2}
 
-def solved_value_if_isolated(lhs: sp.Expr, rhs: sp.Expr):
+# def solved_value_if_isolated(lhs: sp.Expr, rhs: sp.Expr):
+#     """
+#     If equation is j = number (or number = j), return that number as a SymPy expr.
+#     Otherwise return None.
+#     """
+#     try:
+#         lhs_s = sp.simplify(sp.expand(lhs))
+#         rhs_s = sp.simplify(sp.expand(rhs))
+#
+#         if sp.simplify(lhs_s - j) == 0 and not rhs_s.has(j):
+#             return sp.simplify(rhs_s)
+#
+#         if sp.simplify(rhs_s - j) == 0 and not lhs_s.has(j):
+#             return sp.simplify(lhs_s)
+#
+#         return None
+#     except Exception:
+#         return None
+
+def analyze_equation_state(lhs: sp.Expr, rhs: sp.Expr):
     """
-    If equation is j = number (or number = j), return that number as a SymPy expr.
-    Otherwise return None.
+    Determine the state of the equation.
+
+    Returns:
+        ("solved", value)         -> j = value
+        ("identity", None)        -> infinitely many solutions
+        ("contradiction", None)   -> no solution
+        ("unsolved", None)        -> keep solving
     """
     try:
-        lhs_s = sp.simplify(sp.expand(lhs))
-        rhs_s = sp.simplify(sp.expand(rhs))
+        diff = sp.simplify(lhs - rhs)
 
-        if sp.simplify(lhs_s - j) == 0 and not rhs_s.has(j):
-            return sp.simplify(rhs_s)
+        # -----------------------------
+        # Identity: everything cancels
+        # -----------------------------
+        if diff == 0:
+            return ("identity", None)
 
-        if sp.simplify(rhs_s - j) == 0 and not lhs_s.has(j):
-            return sp.simplify(lhs_s)
+        # -----------------------------
+        # No j left → contradiction
+        # -----------------------------
+        if not diff.has(j):
+            return ("contradiction", None)
 
-        return None
+        # -----------------------------
+        # Try solving for j
+        # -----------------------------
+        sol = sp.solve(sp.Eq(lhs, rhs), j)
+
+        if len(sol) == 1:
+            return ("solved", sp.simplify(sol[0]))
+
+        if len(sol) == 0:
+            return ("contradiction", None)
+
+        # fallback (should not happen here)
+        return ("unsolved", None)
+
     except Exception:
-        return None
+        return ("unsolved", None)
 
 def parse_op(op_text: str):
     """
@@ -374,10 +416,23 @@ def format_additive_step(lhs_expr: sp.Expr, rhs_expr: sp.Expr, add_expr: sp.Expr
 
 def apply_op(expr: sp.Expr, parsed_op):
     kind, k = parsed_op
+
     if kind == "add":
-        return sp.simplify(sp.expand(expr + k))
+        # Keep the displayed result as a visible added step
+        return sp.Add(expr, k, evaluate=False)
+
     if kind == "mul":
-        return sp.simplify(sp.expand(expr * k))
+        # For display purposes, distribute multiplication across top-level terms
+        # but do NOT combine like terms yet.
+        if expr.is_Add:
+            new_terms = []
+            for term in sp.Add.make_args(expr):
+                expanded_term = sp.expand_mul(sp.Mul(term, k, evaluate=False))
+                new_terms.append(expanded_term)
+            return sp.Add(*new_terms, evaluate=False)
+
+        return sp.expand_mul(sp.Mul(expr, k, evaluate=False))
+
     raise ValueError("Unknown op kind")
 
 def parse_equation_text(eq_text: str):
@@ -464,6 +519,16 @@ def build_bracket_expr(a: int, b: int, c: int = 0):
 
     return sp.Add(prod, sp.Integer(c), evaluate=False)
 
+def build_fraction_expr(num_expr, den_int):
+    """
+    Build num_expr / den_int without turning it into (...)*(1/den_int).
+    This renders as a proper fraction in LaTeX.
+    """
+    return sp.Mul(
+        num_expr,
+        sp.Pow(sp.Integer(den_int), -1, evaluate=False),
+        evaluate=False
+    )
 # ==============================
 # 🧩 Generators (Linear equations; multiple levels)
 # Each returns dict with display, start_lhs, start_rhs, solution (SymPy)
@@ -523,11 +588,76 @@ def gen_level_4():
         "sol": sp.Integer(sol),
     }
 
+def gen_level_5():
+    """
+    Fractional linear equations:
+      (a1*j + b1)/d1  ±  (a2*j + b2)/d2  =  (a3*j + b3)/d3  + c
+
+    Keep denominators simple and distinct enough that students will usually
+    clear fractions first.
+    """
+
+    denom_sets = [
+        (2, 3, 6),
+        (2, 4, 4),
+        (3, 4, 6),
+        (2, 3, 4),
+        (2, 5, 10),
+        (3, 5, 15),
+    ]
+    d1, d2, d3 = random.choice(denom_sets)
+
+    sol = random.randint(-6, 6)
+
+    # coefficients of j in numerators
+    a1 = nz_int(-5, 5, exclude=[0])
+    a2 = nz_int(-5, 5, exclude=[0])
+    a3 = nz_int(-5, 5, exclude=[0])
+
+    # constants in numerators
+    b1 = random.randint(-9, 9)
+    b2 = random.randint(-9, 9)
+    b3 = random.randint(-9, 9)
+
+    # choose whether middle term is + or -
+    mid_sign = random.choice([1, -1])
+
+    left_1_num = a1 * j + b1
+    left_2_num = a2 * j + b2
+    right_num = a3 * j + b3
+
+    left_expr = sp.Add(
+        build_fraction_expr(left_1_num, d1),
+        build_fraction_expr(mid_sign * left_2_num, d2),
+        evaluate=False
+    )
+
+    # Pick c so that j = sol is the solution
+    left_at_sol = sp.simplify(left_expr.subs(j, sol))
+    right_frac_at_sol = sp.simplify(build_fraction_expr(right_num, d3).subs(j, sol))
+    c = sp.simplify(left_at_sol - right_frac_at_sol)
+
+    rhs = sp.Add(
+        build_fraction_expr(right_num, d3),
+        c,
+        evaluate=False
+    )
+
+    sign_txt = "+" if mid_sign == 1 else "−"
+
+    return {
+        "name": f"Level 5 — fractional equations ({sign_txt} fractions)",
+        "lhs": left_expr,
+        "rhs": rhs,
+        "sol": sp.Integer(sol),
+    }
+
 GENERATORS = {
     1: ("Level 1 — aj + b = c", gen_level_1),
     2: ("Level 2 — a(j + b) = c", gen_level_2),
     3: ("Level 3 — aj + b = dj + e", gen_level_3),
     4: ("Level 4 — a(j+b)+c = d(j+e)+f", gen_level_4),
+    5: ("Level 5 — fractional linear equations", gen_level_5),
 }
 
 # ==============================
@@ -622,12 +752,35 @@ def build_hints_level_4(q):
 
     return hints
 
+def build_hints_level_5(q):
+    lhs_d = q.get("display_lhs", q["current_lhs"])
+    rhs_d = q.get("display_rhs", q["current_rhs"])
+    lhs = sp.simplify(sp.expand(q["current_lhs"]))
+    rhs = sp.simplify(sp.expand(q["current_rhs"]))
+
+    hints = [
+        "Start by clearing the fractions.",
+        "Multiply every term on both sides by the least common denominator.",
+        "After the fractions are gone, collect all j-terms on one side and constants on the other.",
+        "Then divide by the remaining coefficient of j.",
+    ]
+
+    # crude denominator check on displayed forms
+    frac_like = "/" in sp.sstr(lhs_d) or "/" in sp.sstr(rhs_d)
+    if frac_like:
+        hints.insert(1, "A good first step is to multiply both sides by the least common denominator.")
+
+    if lhs.has(j) and rhs.has(j) and not frac_like:
+        hints.insert(1, "Now that the fractions are handled, move one j-term across the equals sign.")
+
+    return hints
 
 HINT_BUILDERS = {
     1: build_hints_level_1,
     2: build_hints_level_2,
     3: build_hints_level_3,
     4: build_hints_level_4,
+    5: build_hints_level_5,
 }
 
 def build_hints_for_question(q):
@@ -655,6 +808,12 @@ def get_equation_reactive_hint(q, old_lhs, old_rhs, new_lhs, new_rhs, old_displa
 
         if new_brackets < old_brackets:
             return "Good step. Expanding brackets helps simplify the equation."
+
+        old_frac_like = "/" in sp.sstr(old_display_lhs) or "/" in sp.sstr(old_display_rhs)
+        new_frac_like = "/" in sp.sstr(new_lhs_raw) or "/" in sp.sstr(new_rhs_raw)
+
+        if old_frac_like and not new_frac_like:
+            return "Good step. You cleared the fractions."
 
         if new_prog["isolated"]:
             return "Nice — j is isolated now."
@@ -1233,17 +1392,34 @@ def solving_equations_practice():
             q["current_rhs"] = new_rhs
             q["available_hints"] = build_hints_for_question(q)
 
-        val = solved_value_if_isolated(new_lhs, new_rhs)
-        if val is not None and sp.simplify(val - q["target_sol"]) == 0:
+        state, value = analyze_equation_state(new_lhs, new_rhs)
+
+        if state == "identity":
             q["correct"] = True
-            val_s = sp.simplify(val)
-            q["solved_line_latex"] = r"j = " + sp.latex(val_s)
+            q["solved_line_latex"] = r"j \in \mathbb{R}"
             q["steps"] = []
-            q["last_message"] = ""
-            if q["attempts"] == 0:
-                q["first_try_correct"] = True
+            q["last_message"] = "🎯 This equation is true for all values of j."
             ss.eq_input_version += 1
             st.rerun()
+
+        elif state == "contradiction":
+            q["correct"] = True
+            q["solved_line_latex"] = r"\text{No solution}"
+            q["steps"] = []
+            q["last_message"] = "🚫 This equation has no solution."
+            ss.eq_input_version += 1
+            st.rerun()
+
+        elif state == "solved":
+            if sp.simplify(value - q["target_sol"]) == 0:
+                q["correct"] = True
+                q["solved_line_latex"] = r"j = " + sp.latex(value)
+                q["steps"] = []
+                q["last_message"] = ""
+                if q["attempts"] == 0:
+                    q["first_try_correct"] = True
+                ss.eq_input_version += 1
+                st.rerun()
 
         old_prog = measure_progress(old_lhs, old_rhs)
         new_prog = measure_progress(new_lhs, new_rhs)
