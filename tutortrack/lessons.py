@@ -404,6 +404,15 @@ def remove_student():
             ss.edit_student = None
             st.rerun()
 
+def apply_student_selection():
+    if ss.pills_selected:
+        ss.student_list = list(ss.pills_selected)
+        ss.edit_student = ss.student_list[0]
+        ss.lesson_number = 0
+        get_student_data()
+
+        # Close the popover before rerun
+        st.session_state.student_list_popover = False
 
 @st.dialog("Add lesson")
 def add_new_lesson():
@@ -470,6 +479,9 @@ if "lesson_number" not in ss:
     ss.addLesson = False
     ss.rowID = 0
 
+if "student_list_popover" not in ss:
+    ss.student_list_popover = False
+
 #  Menu and selection setup
 with st.sidebar:
     get_student_list()
@@ -486,16 +498,19 @@ with st.sidebar:
                     ss.edit_student = None
                 st.rerun()
 
-    with st.popover("Student List"):
-        st.pills("Student List", ss.name_list, selection_mode="multi", key="pills_selected")
+    with st.popover(
+        "Student List",
+        key="student_list_popover",
+        on_change="rerun",
+    ):
+        st.pills(
+            "Student List",
+            ss.name_list,
+            selection_mode="multi",
+            key="pills_selected"
+        )
 
-        if st.button("Apply selection"):
-            if ss.pills_selected:
-                ss.student_list = list(ss.pills_selected)
-                ss.edit_student = ss.student_list[0]
-                ss.lesson_number = 0
-                get_student_data()
-                st.rerun()
+        st.button("Apply selection", on_click=apply_student_selection)
 
     if ss.student_list:
         if "student_radio" not in ss:
