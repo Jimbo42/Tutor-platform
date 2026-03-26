@@ -247,8 +247,15 @@ def open_preview_dialog():
         with c2:
             if st.button("🧹 Clear cache", width="stretch", key="pm_clear_cache"):
                 if file_id:
-                    ss.pm_interactive_cache.pop(file_id, None)
-                    ss.pm_interactive_cache_meta.pop(file_id, None)
+                    cache = ss.get("pm_interactive_cache", {})
+                    cache_meta = ss.get("pm_interactive_cache_meta", {})
+
+                    cache.pop(file_id, None)
+                    cache_meta.pop(file_id, None)
+
+                    ss["pm_interactive_cache"] = cache
+                    ss["pm_interactive_cache_meta"] = cache_meta
+
                 ss.pm_preview_obj = None
                 st.toast("Cache cleared for this item")
                 return
@@ -313,8 +320,14 @@ def open_delete_dialog(item: dict):
                 ss.pm_preview_error = None
 
             if file_id:
-                ss.pm_interactive_cache.pop(file_id, None)
-                ss.pm_interactive_cache_meta.pop(file_id, None)
+                cache = ss.get("pm_interactive_cache", {})
+                cache_meta = ss.get("pm_interactive_cache_meta", {})
+
+                cache.pop(file_id, None)
+                cache_meta.pop(file_id, None)
+
+                ss["pm_interactive_cache"] = cache
+                ss["pm_interactive_cache_meta"] = cache_meta
 
             # 1) Remove from catalog tab
             _delete_catalog_row(tab_name, published_id)
@@ -392,6 +405,14 @@ def open_edit_interactive_json_dialog(item: dict):
             try:
                 data = json.dumps(parsed, ensure_ascii=False, indent=2).encode("utf-8")
                 update_drive_file_bytes(file_id=file_id, data=data, mime_type="application/json")
+
+                cache = ss.get("pm_interactive_cache", {})
+                cache_meta = ss.get("pm_interactive_cache_meta", {})
+                cache.pop(file_id, None)
+                cache_meta.pop(file_id, None)
+                ss["pm_interactive_cache"] = cache
+                ss["pm_interactive_cache_meta"] = cache_meta
+
                 st.toast("Saved to Drive ✅", icon="💾")
                 st.rerun()
             except Exception as e:

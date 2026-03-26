@@ -3,8 +3,10 @@
 
 import streamlit as st
 from streamlit import session_state as ss
+import streamlit.components.v1 as components
 import random
 import time
+import uuid
 import re
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -13,7 +15,11 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
     convert_xor,
 )
-from shared.google_db import get_published_pdf_preview_url_by_generator_id
+from shared.google_db import (
+    append_solving_equations_round,
+    append_solving_equations_attempt,
+    get_published_pdf_preview_url_by_generator_id,
+)
 
 # ==============================
 # 🔣 SymPy setup (match factoring_practice style)
@@ -236,62 +242,38 @@ def measure_progress(lhs: sp.Expr, rhs: sp.Expr):
     except Exception:
         return {"isolated": False, "j_presence": 2, "deg_sum": 2, "j_side_terms": 2}
 
-# def solved_value_if_isolated(lhs: sp.Expr, rhs: sp.Expr):
-#     """
-#     If equation is j = number (or number = j), return that number as a SymPy expr.
-#     Otherwise return None.
-#     """
-#     try:
-#         lhs_s = sp.simplify(sp.expand(lhs))
-#         rhs_s = sp.simplify(sp.expand(rhs))
-#
-#         if sp.simplify(lhs_s - j) == 0 and not rhs_s.has(j):
-#             return sp.simplify(rhs_s)
-#
-#         if sp.simplify(rhs_s - j) == 0 and not lhs_s.has(j):
-#             return sp.simplify(lhs_s)
-#
-#         return None
-#     except Exception:
-#         return None
-
 def analyze_equation_state(lhs: sp.Expr, rhs: sp.Expr):
     """
     Determine the state of the equation.
 
     Returns:
-        ("solved", value)         -> j = value
+        ("solved", value)         -> only when j is explicitly isolated
         ("identity", None)        -> infinitely many solutions
         ("contradiction", None)   -> no solution
         ("unsolved", None)        -> keep solving
     """
     try:
-        diff = sp.simplify(lhs - rhs)
+        lhs_s = sp.simplify(sp.expand(lhs))
+        rhs_s = sp.simplify(sp.expand(rhs))
+        diff = sp.simplify(lhs_s - rhs_s)
 
-        # -----------------------------
-        # Identity: everything cancels
-        # -----------------------------
+        # Identity: same expression both sides
         if diff == 0:
             return ("identity", None)
 
-        # -----------------------------
-        # No j left → contradiction
-        # -----------------------------
+        # No variable left and not equal -> contradiction
         if not diff.has(j):
             return ("contradiction", None)
 
-        # -----------------------------
-        # Try solving for j
-        # -----------------------------
-        sol = sp.solve(sp.Eq(lhs, rhs), j)
+        # Solved ONLY if j is explicitly isolated
+        if sp.simplify(lhs_s - j) == 0 and not rhs_s.has(j):
+            return ("solved", sp.simplify(rhs_s))
 
-        if len(sol) == 1:
-            return ("solved", sp.simplify(sol[0]))
+        if sp.simplify(rhs_s - j) == 0 and not lhs_s.has(j):
+            return ("solved", sp.simplify(lhs_s))
 
-        if len(sol) == 0:
-            return ("contradiction", None)
-
-        # fallback (should not happen here)
+        # Otherwise it may be equivalent and uniquely solvable,
+        # but it is not yet in solved form.
         return ("unsolved", None)
 
     except Exception:
@@ -837,12 +819,137 @@ def get_equation_reactive_hint(q, old_lhs, old_rhs, new_lhs, new_rhs, old_displa
     except Exception:
         return "Equivalent step, but try isolating j."
 
+def _equations_username() -> str:
+    for key in ("username", "user_name", "student_name", "student", "name"):
+        v = ss.get(key)
+        if v:
+            return str(v).strip()
+    return "unknown"
+
+def _equation_text(lhs, rhs) -> str:
+    try:
+        return f"{sp.sstr(lhs)} = {sp.sstr(rhs)}"
+    except Exception:
+        return ""
+
+def _log_equation_attempt(
+    q,
+    *,
+    input_mode: str,
+    input_text: str,
+    parsed_ok: bool,
+    eq_before: str,
+    eq_after: str,
+    equivalent_to_current: bool,
+    is_done: bool,
+    is_progress_step: bool,
+    invalid_step: bool,
+    invalid_reason: str,
+    reactive_hint: str,
+):
+    try:
+        username = _equations_username()
+        round_key = ss.equations.get("round_key", "")
+        round_id = ss.equations.get("round_id", "")
+
+        now = time.time()
+        response_time = max(0.0, now - q.get("question_start_time", now))
+        q["question_total_response_time"] = q.get("question_total_response_time", 0.0) + response_time
+        q["question_start_time"] = now
+
+        if invalid_step:
+            q["invalid_steps"] = q.get("invalid_steps", 0) + 1
+
+        attempt_id = f"eqatt_{uuid.uuid4().hex[:12]}"
+
+        append_solving_equations_attempt(
+            attempt_id=attempt_id,
+            username=username,
+            round_key=round_key,
+            round_id=round_id,
+            question_seq=q.get("question_seq", 0),
+            level=q.get("level", 0),
+            question_text=_equation_text(q.get("start_lhs"), q.get("start_rhs")),
+            target_solution=sp.sstr(q.get("target_sol")),
+            input_mode=input_mode,
+            input_text=input_text or "",
+            parsed_ok=parsed_ok,
+            equivalent_to_current=equivalent_to_current,
+            is_done=is_done,
+            is_progress_step=is_progress_step,
+            invalid_step=invalid_step,
+            invalid_reason=invalid_reason or "",
+            reactive_hint=reactive_hint or "",
+            attempt_number=int(q.get("attempts", 0)) + 1,
+            response_time=response_time,
+            hints_used_so_far=int(q.get("hints_used", 0)),
+            steps_count=len(q.get("steps", [])),
+            current_equation_before=eq_before,
+            current_equation_after=eq_after,
+        )
+    except Exception:
+        pass
+
+def _log_equation_round_once(completed=True, notes=""):
+
+    if not ss.get("equations"):
+        return
+    if ss.equations.get("round_logged"):
+        return
+
+    try:
+        questions = ss.equations.get("questions", [])
+        elapsed = max(0.0, time.time() - ss.equations.get("start_time", time.time()))
+        total = len(questions)
+        correct = sum(1 for q in questions if q.get("correct"))
+        incorrect = total - correct
+        attempts_total = sum(int(q.get("attempts", 0)) for q in questions)
+        hints_used_total = sum(int(q.get("hints_used", 0)) for q in questions)
+        invalid_steps_total = sum(int(q.get("invalid_steps", 0)) for q in questions)
+
+        response_times = [
+            float(q.get("question_total_response_time", 0.0))
+            for q in questions
+            if q.get("question_total_response_time", 0.0) > 0
+        ]
+        avg_response_time = (sum(response_times) / len(response_times)) if response_times else 0.0
+
+        levels_csv = ",".join(str(x) for x in ss.equations.get("levels_selected", []))
+        username = _equations_username()
+
+        questions_completed = sum(1 for q in questions if q.get("correct"))
+
+        ok = append_solving_equations_round(
+            username=username,
+            round_key=ss.equations.get("round_key", ""),
+            round_id=ss.equations.get("round_id", ""),
+            game_name="Solving Equations Practice",
+            questions_served=total,
+            questions_completed=questions_completed,
+            correct=correct,
+            incorrect=incorrect,
+            attempts_total=attempts_total,
+            round_time=elapsed,
+            average_response_time=avg_response_time,
+            levels_csv=levels_csv,
+            hints_used_total=hints_used_total,
+            invalid_steps_total=invalid_steps_total,
+            completed=bool(completed),
+            notes=notes or "",
+        )
+
+        ss.equations["round_logged"] = True
+        ss.equations["round_log_status"] = f"round append returned: {ok}"
+
+    except Exception as e:
+        ss.equations["round_log_status"] = f"{type(e).__name__}: {e}"
+
 # ==============================
 # 🧠 Session Engine
 # ==============================
 def start_equations_session(num_questions, levels):
     qs = []
-    for _ in range(num_questions):
+    for i in range(num_questions):
         lvl = random.choice(levels)
         _, gen = GENERATORS[lvl]
         g = gen()
@@ -879,6 +986,11 @@ def start_equations_session(num_questions, levels):
 
             "flash_correct": False,
             "flash_final_latex": "",
+
+            "question_seq": i + 1,
+            "question_start_time": time.time(),
+            "question_total_response_time": 0.0,
+            "invalid_steps": 0,
         })
 
     ss.equations = {
@@ -886,9 +998,12 @@ def start_equations_session(num_questions, levels):
         "questions": qs,
         "current": 0,
         "finished": False,
+        "round_id": uuid.uuid4().hex[:10],
+        "round_key": f"solvingeq_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+        "levels_selected": list(levels),
+        "num_questions": int(num_questions),
+        "round_logged": False,
     }
-
-import streamlit.components.v1 as components
 
 @st.dialog("📘 Reference Lesson", width="large")
 def open_reference_pdf_dialog(title: str, preview_url: str):
@@ -990,7 +1105,7 @@ def solving_equations_practice():
         if not ss.eq_selected_levels:
             st.warning("Select at least one level to continue.")
         else:
-            if st.button("🚀 Start Practice", use_container_width=True):
+            if st.button("🚀 Start Practice", width="stretch"):
                 ss.eq_setup_open = False
                 start_equations_session(num_q, ss.eq_selected_levels)
                 ss.eq_input_version += 1
@@ -1008,6 +1123,10 @@ def solving_equations_practice():
         total = len(qs)
         correct = sum(1 for q in qs if q.get("correct"))
         first_try = sum(1 for q in qs if q.get("first_try_correct"))
+
+        _log_equation_round_once()
+        if ss.equations.get("round_log_status"):
+            st.caption(f"Round log status: {ss.equations['round_log_status']}")
 
         st.success("✅ Practice Complete!")
         st.markdown(
@@ -1029,6 +1148,17 @@ def solving_equations_practice():
     idx = ss.equations["current"]
     qs = ss.equations["questions"]
     q = qs[idx]
+
+    q.setdefault("attempts", 0)
+    q.setdefault("steps", [])
+    q.setdefault("last_message", "")
+    q.setdefault("correct", False)
+    q.setdefault("first_try_correct", False)
+    q.setdefault("hints_used", 0)
+    q.setdefault("question_seq", idx + 1)
+    q.setdefault("question_start_time", time.time())
+    q.setdefault("question_total_response_time", 0.0)
+    q.setdefault("invalid_steps", 0)
 
     if q.get("available_hints") is None:
         q["available_hints"] = build_hints_for_question(q)
@@ -1058,6 +1188,19 @@ def solving_equations_practice():
     with r_col:
         st.markdown("<div style='margin-top:-0.15rem;'></div>", unsafe_allow_html=True)
         if st.button("🔄 Restart", key=f"restart_top_{idx}", width="stretch"):
+            # If any work has been done in this round, log a partial round before clearing it.
+            eq_state = ss.get("equations")
+            if eq_state and not eq_state.get("round_logged"):
+                questions = eq_state.get("questions", [])
+                any_activity = any(
+                    q.get("attempts", 0) > 0
+                    or q.get("hints_used", 0) > 0
+                    or q.get("correct", False)
+                    for q in questions
+                )
+                if any_activity:
+                    _log_equation_round_once(completed=False, notes="Restarted before round finished.")
+
             ss.equations = None
             ss.eq_setup_open = True
             ss.eq_input_version += 1
@@ -1291,11 +1434,39 @@ def solving_equations_practice():
         using_equation = bool(mid_txt)
 
         if using_ops and using_equation:
+            _log_equation_attempt(
+                q,
+                input_mode="mixed",
+                input_text=f"LS={left_txt} | EQ={mid_txt} | RS={right_txt}",
+                parsed_ok=False,
+                eq_before=_equation_text(q["current_lhs"], q["current_rhs"]),
+                eq_after=_equation_text(q["current_lhs"], q["current_rhs"]),
+                equivalent_to_current=False,
+                is_done=False,
+                is_progress_step=False,
+                invalid_step=True,
+                invalid_reason="Used both side operations and full equation entry.",
+                reactive_hint="Use either the side operations or the full equation entry, not both.",
+            )
             q["attempts"] += 1
             q["last_message"] = "❌ Use either the side operations or the full equation entry, not both."
             st.rerun()
 
         if not using_ops and not using_equation:
+            _log_equation_attempt(
+                q,
+                input_mode="blank",
+                input_text="",
+                parsed_ok=False,
+                eq_before=_equation_text(q["current_lhs"], q["current_rhs"]),
+                eq_after=_equation_text(q["current_lhs"], q["current_rhs"]),
+                equivalent_to_current=False,
+                is_done=False,
+                is_progress_step=False,
+                invalid_step=True,
+                invalid_reason="Blank submission.",
+                reactive_hint="Enter a step before submitting.",
+            )
             q["attempts"] += 1
             q["last_message"] = "❌ Enter a step before submitting."
             st.rerun()
@@ -1313,11 +1484,39 @@ def solving_equations_practice():
             pR = parse_op(right_txt)
 
             if pL is None or pR is None:
+                _log_equation_attempt(
+                    q,
+                    input_mode="operation",
+                    input_text=f"LS={left_txt} | RS={right_txt}",
+                    parsed_ok=False,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(old_lhs, old_rhs),
+                    equivalent_to_current=False,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Operation parse failed.",
+                    reactive_hint="Use +expr or -expr, or *k /k where k is a nonzero number.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ Use +expr or -expr, or *k /k where k is a nonzero number."
                 st.rerun()
 
             if not same_operation(pL, pR):
+                _log_equation_attempt(
+                    q,
+                    input_mode="operation",
+                    input_text=f"LS={left_txt} | RS={right_txt}",
+                    parsed_ok=True,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(old_lhs, old_rhs),
+                    equivalent_to_current=False,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Operations did not match on both sides.",
+                    reactive_hint="Operations must match on both sides.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ Operations must match on both sides."
                 st.rerun()
@@ -1329,6 +1528,20 @@ def solving_equations_practice():
             new_rhs = sp.simplify(sp.expand(new_rhs_raw))
 
             if sp.simplify(new_lhs - old_lhs) == 0 and sp.simplify(new_rhs - old_rhs) == 0:
+                _log_equation_attempt(
+                    q,
+                    input_mode="operation",
+                    input_text=f"LS={left_txt} | RS={right_txt}",
+                    parsed_ok=True,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(new_lhs, new_rhs),
+                    equivalent_to_current=True,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Operation produced no change.",
+                    reactive_hint="That didn’t change the equation.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ That didn’t change the equation."
                 st.rerun()
@@ -1338,14 +1551,17 @@ def solving_equations_practice():
 
             if kind == "add":
                 op_display = format_additive_step(old_display_lhs, old_display_rhs, k)
+                # For add/subtract, it is helpful to show the simplified result
+                result_display = sp.latex(new_lhs) + " = " + sp.latex(new_rhs)
             else:
                 op_display = (
                     f"({sp.latex(old_display_lhs)}) \\cdot ({sp.latex(k)})"
                     + " = "
                     + f"({sp.latex(old_display_rhs)}) \\cdot ({sp.latex(k)})"
                 )
-
-            result_display = sp.latex(new_lhs_raw) + " = " + sp.latex(new_rhs_raw)
+                # For multiply/divide, show the immediate distributed next step,
+                # not the already-combined simplified equation.
+                result_display = sp.latex(new_lhs_raw) + " = " + sp.latex(new_rhs_raw)
 
             q["steps"].append({
                 "op_display": op_display,
@@ -1366,16 +1582,58 @@ def solving_equations_practice():
             new_lhs_raw, new_rhs_raw, new_lhs, new_rhs = parse_equation_text(mid_txt)
 
             if new_lhs_raw is None or new_rhs_raw is None:
+                _log_equation_attempt(
+                    q,
+                    input_mode="equation",
+                    input_text=mid_txt,
+                    parsed_ok=False,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(old_lhs, old_rhs),
+                    equivalent_to_current=False,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Full equation parse failed.",
+                    reactive_hint="Enter a full equation such as 3j = -9.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ Enter a full equation such as 3j = -9."
                 st.rerun()
 
             if not equation_changed(old_display_lhs, old_display_rhs, new_lhs_raw, new_rhs_raw):
+                _log_equation_attempt(
+                    q,
+                    input_mode="equation",
+                    input_text=mid_txt,
+                    parsed_ok=True,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(new_lhs, new_rhs),
+                    equivalent_to_current=True,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Entered equation did not change the current equation.",
+                    reactive_hint="That didn’t change the equation.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ That didn’t change the equation."
                 st.rerun()
 
             if not equivalent_equations(old_lhs, old_rhs, new_lhs, new_rhs):
+                _log_equation_attempt(
+                    q,
+                    input_mode="equation",
+                    input_text=mid_txt,
+                    parsed_ok=True,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(new_lhs, new_rhs),
+                    equivalent_to_current=False,
+                    is_done=False,
+                    is_progress_step=False,
+                    invalid_step=True,
+                    invalid_reason="Entered equation was not equivalent to the current equation.",
+                    reactive_hint="That new equation is not equivalent to the current one.",
+                )
                 q["attempts"] += 1
                 q["last_message"] = "❌ That new equation is not equivalent to the current one."
                 st.rerun()
@@ -1393,33 +1651,6 @@ def solving_equations_practice():
             q["available_hints"] = build_hints_for_question(q)
 
         state, value = analyze_equation_state(new_lhs, new_rhs)
-
-        if state == "identity":
-            q["correct"] = True
-            q["solved_line_latex"] = r"j \in \mathbb{R}"
-            q["steps"] = []
-            q["last_message"] = "🎯 This equation is true for all values of j."
-            ss.eq_input_version += 1
-            st.rerun()
-
-        elif state == "contradiction":
-            q["correct"] = True
-            q["solved_line_latex"] = r"\text{No solution}"
-            q["steps"] = []
-            q["last_message"] = "🚫 This equation has no solution."
-            ss.eq_input_version += 1
-            st.rerun()
-
-        elif state == "solved":
-            if sp.simplify(value - q["target_sol"]) == 0:
-                q["correct"] = True
-                q["solved_line_latex"] = r"j = " + sp.latex(value)
-                q["steps"] = []
-                q["last_message"] = ""
-                if q["attempts"] == 0:
-                    q["first_try_correct"] = True
-                ss.eq_input_version += 1
-                st.rerun()
 
         old_prog = measure_progress(old_lhs, old_rhs)
         new_prog = measure_progress(new_lhs, new_rhs)
@@ -1443,6 +1674,93 @@ def solving_equations_practice():
             old_display_rhs=old_display_rhs,
             new_lhs_raw=new_lhs_raw,
             new_rhs_raw=new_rhs_raw,
+        )
+        if state == "identity":
+            _log_equation_attempt(
+                q,
+                input_mode="operation" if using_ops else "equation",
+                input_text=f"LS={left_txt} | RS={right_txt}" if using_ops else mid_txt,
+                parsed_ok=True,
+                eq_before=_equation_text(old_lhs, old_rhs),
+                eq_after=_equation_text(new_lhs, new_rhs),
+                equivalent_to_current=True,
+                is_done=True,
+                is_progress_step=True,
+                invalid_step=False,
+                invalid_reason="",
+                reactive_hint="This equation is true for all values of j.",
+            )
+            q["correct"] = True
+            q["solved_line_latex"] = r"j \in \mathbb{R}"
+            q["steps"] = []
+            q["last_message"] = "🎯 This equation is true for all values of j."
+            if q["attempts"] == 0:
+                q["first_try_correct"] = True
+            ss.eq_input_version += 1
+            st.rerun()
+
+        elif state == "contradiction":
+            _log_equation_attempt(
+                q,
+                input_mode="operation" if using_ops else "equation",
+                input_text=f"LS={left_txt} | RS={right_txt}" if using_ops else mid_txt,
+                parsed_ok=True,
+                eq_before=_equation_text(old_lhs, old_rhs),
+                eq_after=_equation_text(new_lhs, new_rhs),
+                equivalent_to_current=True,
+                is_done=True,
+                is_progress_step=True,
+                invalid_step=False,
+                invalid_reason="",
+                reactive_hint="This equation has no solution.",
+            )
+            q["correct"] = True
+            q["solved_line_latex"] = r"\text{No solution}"
+            q["steps"] = []
+            q["last_message"] = "🚫 This equation has no solution."
+            if q["attempts"] == 0:
+                q["first_try_correct"] = True
+            ss.eq_input_version += 1
+            st.rerun()
+
+        elif state == "solved":
+            if sp.simplify(value - q["target_sol"]) == 0:
+                _log_equation_attempt(
+                    q,
+                    input_mode="operation" if using_ops else "equation",
+                    input_text=f"LS={left_txt} | RS={right_txt}" if using_ops else mid_txt,
+                    parsed_ok=True,
+                    eq_before=_equation_text(old_lhs, old_rhs),
+                    eq_after=_equation_text(new_lhs, new_rhs),
+                    equivalent_to_current=True,
+                    is_done=True,
+                    is_progress_step=True,
+                    invalid_step=False,
+                    invalid_reason="",
+                    reactive_hint="j is isolated now.",
+                )
+                q["correct"] = True
+                q["solved_line_latex"] = r"j = " + sp.latex(value)
+                q["steps"] = []
+                q["last_message"] = ""
+                if q["attempts"] == 0:
+                    q["first_try_correct"] = True
+                ss.eq_input_version += 1
+                st.rerun()
+
+        _log_equation_attempt(
+            q,
+            input_mode="operation" if using_ops else "equation",
+            input_text=f"LS={left_txt} | RS={right_txt}" if using_ops else mid_txt,
+            parsed_ok=True,
+            eq_before=_equation_text(old_lhs, old_rhs),
+            eq_after=_equation_text(new_lhs, new_rhs),
+            equivalent_to_current=True,
+            is_done=False,
+            is_progress_step=helpful,
+            invalid_step=False,
+            invalid_reason="",
+            reactive_hint=reactive,
         )
 
         q["last_message"] = ("✅ " + reactive) if helpful else ("🧠 " + reactive)
