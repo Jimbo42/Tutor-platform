@@ -1,12 +1,8 @@
 [theme]
-base = "dark"
-
-primaryColor = "#60a5fa"
-
-backgroundColor = "#08111f"
-secondaryBackgroundColor = "#263852"
-
-textColor = "#f8fafc"
-borderColor = "#9fb3c8"
-
+base = "light"
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f6fb"
+textColor = "#111827"
+borderColor = "#cbd5e1"
 showWidgetBorder = true

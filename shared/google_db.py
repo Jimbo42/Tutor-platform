@@ -52,7 +52,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import pandas as pd
@@ -528,6 +528,97 @@ def read_sheet_as_df(sheet_name: str) -> pd.DataFrame:
 
     return pd.DataFrame(normalized_rows, columns=headers)
 
+def _to_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    return s in ("true", "1", "yes", "y")
+
+def _to_int(v, default: int = 0) -> int:
+    try:
+        if v in ("", None):
+            return default
+        return int(float(v))
+    except Exception:
+        return default
+
+def _to_float(v, default: float = 0.0) -> float:
+    try:
+        if v in ("", None):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+def _clean_str(v) -> str:
+    return "" if v is None else str(v).strip()
+
+def _worksheet_records(sheet_name: str) -> list[dict]:
+    """
+    Return all data rows as list[dict] using row 1 as headers.
+    Blank sheet -> [].
+    """
+    ws = get_sheet(sheet_name)
+    try:
+        return ws.get_all_records()
+    except Exception:
+        df = read_sheet_as_df(sheet_name)
+        return [] if df.empty else df.fillna("").to_dict("records")
+
+def find_row_number_by_values(tab_name: str, match_dict: dict) -> int | None:
+    """
+    Find the first worksheet row number (2-based) whose cells match all supplied header/value pairs.
+    Returns None if not found.
+    """
+    ws = get_sheet(tab_name)
+    idx_map, headers = _header_index_map(ws)
+
+    required_headers = list(match_dict.keys())
+    for h in required_headers:
+        if h not in idx_map:
+            raise ValueError(f"Sheet '{tab_name}' is missing required header '{h}'.")
+
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return None
+
+    for row_num, row in enumerate(all_values[1:], start=2):
+        if len(row) < len(headers):
+            row = row + [""] * (len(headers) - len(row))
+        row_map = {headers[i]: row[i] for i in range(len(headers))}
+
+        ok = True
+        for h, expected in match_dict.items():
+            if _clean_str(row_map.get(h, "")) != _clean_str(expected):
+                ok = False
+                break
+
+        if ok:
+            return row_num
+
+    return None
+
+def upsert_row_by_headers(tab_name: str, match_dict: dict, row_dict: dict):
+    """
+    Update an existing row matched by match_dict, or append a new row if not found.
+    Writes values using the sheet header order.
+    """
+    ws = get_sheet(tab_name)
+    idx_map, headers = _header_index_map(ws)
+
+    row_values = [row_dict.get(h, "") for h in headers]
+    row_num = find_row_number_by_values(tab_name, match_dict)
+
+    if row_num is None:
+        ws.append_row(row_values, value_input_option="USER_ENTERED")
+        return "inserted"
+
+    start_col = 1
+    end_col = len(headers)
+    cell_range = gspread.utils.rowcol_to_a1(row_num, start_col) + ":" + gspread.utils.rowcol_to_a1(row_num, end_col)
+    ws.update(cell_range, [row_values], value_input_option="USER_ENTERED")
+    return "updated"
+
 def update_cell_by_published_id(tab_name: str, published_id: str, header_name: str, value: str):
     """
     Update one cell on a sheet row identified by published_id.
@@ -794,6 +885,284 @@ def append_numerace_attempt(
     }
 
     return append_row_by_header_unique("numerace_attempts", row, "attempt_id")
+
+def get_numerace_attempt_rows(username: str) -> list[dict]:
+    """
+    Read all numerace_attempts rows for one username.
+    Returns normalized Python types for the main numeric/bool fields.
+    """
+    username = _clean_str(username)
+    if not username:
+        return []
+
+    rows = _worksheet_records("numerace_attempts")
+    out = []
+
+    for r in rows:
+        if _clean_str(r.get("username", "")) != username:
+            continue
+
+        out.append({
+            "timestamp": _clean_str(r.get("timestamp", "")),
+            "username": _clean_str(r.get("username", "")),
+            "round_key": _clean_str(r.get("round_key", "")),
+            "round_id": _clean_str(r.get("round_id", "")),
+            "attempt_id": _clean_str(r.get("attempt_id", "")),
+            "question_seq": _to_int(r.get("question_seq", 0)),
+            "question_id": _clean_str(r.get("question_id", "")),
+            "question_title": _clean_str(r.get("question_title", "")),
+            "domain": _clean_str(r.get("domain", "")),
+            "skill": _clean_str(r.get("skill", "")),
+            "subskill": _clean_str(r.get("subskill", "")),
+            "difficulty": _clean_str(r.get("difficulty", "")),
+            "mastery_group": _clean_str(r.get("mastery_group", "")),
+            "correct": _to_bool(r.get("correct", False)),
+            "missed": _to_bool(r.get("missed", False)),
+            "attempts_on_question": _to_int(r.get("attempts_on_question", 0)),
+            "response_time": _to_float(r.get("response_time", 0.0)),
+            "selected_answer": _clean_str(r.get("selected_answer", "")),
+            "correct_answer": _clean_str(r.get("correct_answer", "")),
+            "choice_count": _to_int(r.get("choice_count", 0)),
+            "prompt_text": _clean_str(r.get("prompt_text", "")),
+            "generated_values_json": _clean_str(r.get("generated_values_json", "{}")),
+            "tags_csv": _clean_str(r.get("tags_csv", "")),
+        })
+
+    return out
+
+def get_numerace_user_profile_rows_with_row_numbers(username: str) -> list[dict]:
+    """
+    Read all numerace_user_profile rows for one username, including worksheet row numbers.
+    This performs one sheet read and returns normalized rows plus _row_number.
+    """
+    username = _clean_str(username)
+    if not username:
+        return []
+
+    ws = get_sheet("numerace_user_profile")
+    all_values = ws.get_all_values()
+    if len(all_values) <= 1:
+        return []
+
+    headers = all_values[0]
+    out = []
+
+    for row_num, row in enumerate(all_values[1:], start=2):
+        if len(row) < len(headers):
+            row = row + [""] * (len(headers) - len(row))
+        elif len(row) > len(headers):
+            row = row[:len(headers)]
+
+        r = {headers[i]: row[i] for i in range(len(headers))}
+        if _clean_str(r.get("username", "")) != username:
+            continue
+
+        out.append({
+            "_row_number": row_num,
+            "timestamp_updated": _clean_str(r.get("timestamp_updated", "")),
+            "username": _clean_str(r.get("username", "")),
+            "domain": _clean_str(r.get("domain", "")),
+            "skill": _clean_str(r.get("skill", "")),
+            "subskill": _clean_str(r.get("subskill", "")),
+            "mastery_group": _clean_str(r.get("mastery_group", "")),
+            "questions_seen": _to_int(r.get("questions_seen", 0)),
+            "correct_count": _to_int(r.get("correct_count", 0)),
+            "missed_count": _to_int(r.get("missed_count", 0)),
+            "incorrect_count": _to_int(r.get("incorrect_count", 0)),
+            "accuracy": _to_float(r.get("accuracy", 0.0)),
+            "avg_response_time": _to_float(r.get("avg_response_time", 0.0)),
+            "recent_accuracy": _to_float(r.get("recent_accuracy", 0.0)),
+            "recent_avg_response_time": _to_float(r.get("recent_avg_response_time", 0.0)),
+            "current_multiplier": _to_float(r.get("current_multiplier", 1.0)),
+            "recommended_action": _clean_str(r.get("recommended_action", "")),
+            "last_seen": _clean_str(r.get("last_seen", "")),
+        })
+
+    return out
+
+# def get_numerace_user_profile_rows(username: str) -> list[dict]:
+#     """
+#     Read all numerace_user_profile rows for one username.
+#     """
+#     username = _clean_str(username)
+#     if not username:
+#         return []
+#
+#     rows = _worksheet_records("numerace_user_profile")
+#     out = []
+#
+#     for r in rows:
+#         if _clean_str(r.get("username", "")) != username:
+#             continue
+#
+#         out.append({
+#             "timestamp_updated": _clean_str(r.get("timestamp_updated", "")),
+#             "username": _clean_str(r.get("username", "")),
+#             "domain": _clean_str(r.get("domain", "")),
+#             "skill": _clean_str(r.get("skill", "")),
+#             "subskill": _clean_str(r.get("subskill", "")),
+#             "mastery_group": _clean_str(r.get("mastery_group", "")),
+#             "questions_seen": _to_int(r.get("questions_seen", 0)),
+#             "correct_count": _to_int(r.get("correct_count", 0)),
+#             "missed_count": _to_int(r.get("missed_count", 0)),
+#             "incorrect_count": _to_int(r.get("incorrect_count", 0)),
+#             "accuracy": _to_float(r.get("accuracy", 0.0)),
+#             "avg_response_time": _to_float(r.get("avg_response_time", 0.0)),
+#             "recent_accuracy": _to_float(r.get("recent_accuracy", 0.0)),
+#             "recent_avg_response_time": _to_float(r.get("recent_avg_response_time", 0.0)),
+#             "current_multiplier": _to_float(r.get("current_multiplier", 1.0)),
+#             "recommended_action": _clean_str(r.get("recommended_action", "")),
+#             "last_seen": _clean_str(r.get("last_seen", "")),
+#         })
+#
+#     return out
+
+def upsert_numerace_user_profile_rows_fast(rows: list[dict], existing_row_map: dict | None = None) -> dict:
+    """
+    Upsert profile rows using an in-memory existing_row_map:
+    key = (username, domain, skill, subskill, mastery_group) -> worksheet row number
+
+    Returns updated row map.
+    """
+    if not rows:
+        return existing_row_map or {}
+
+    ws = get_sheet("numerace_user_profile")
+    idx_map, headers = _header_index_map(ws)
+    row_map = dict(existing_row_map or {})
+
+    ts_now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    append_payload = []
+    append_keys = []
+
+    for row in rows:
+        username = _clean_str(row.get("username", ""))
+        domain = _clean_str(row.get("domain", ""))
+        skill = _clean_str(row.get("skill", ""))
+        subskill = _clean_str(row.get("subskill", ""))
+        mastery_group = _clean_str(row.get("mastery_group", ""))
+
+        if not username:
+            continue
+
+        key = (username, domain, skill, subskill, mastery_group)
+
+        row_to_write = {
+            "timestamp_updated": _clean_str(row.get("timestamp_updated", "")) or ts_now,
+            "username": username,
+            "domain": domain,
+            "skill": skill,
+            "subskill": subskill,
+            "mastery_group": mastery_group,
+            "questions_seen": _to_int(row.get("questions_seen", 0)),
+            "correct_count": _to_int(row.get("correct_count", 0)),
+            "missed_count": _to_int(row.get("missed_count", 0)),
+            "incorrect_count": _to_int(row.get("incorrect_count", 0)),
+            "accuracy": _to_float(row.get("accuracy", 0.0)),
+            "avg_response_time": _to_float(row.get("avg_response_time", 0.0)),
+            "recent_accuracy": _to_float(row.get("recent_accuracy", 0.0)),
+            "recent_avg_response_time": _to_float(row.get("recent_avg_response_time", 0.0)),
+            "current_multiplier": _to_float(row.get("current_multiplier", 1.0)),
+            "recommended_action": _clean_str(row.get("recommended_action", "")),
+            "last_seen": _clean_str(row.get("last_seen", "")),
+        }
+
+        row_values = [row_to_write.get(h, "") for h in headers]
+        existing_row_num = row_map.get(key)
+
+        if existing_row_num:
+            start_col = 1
+            end_col = len(headers)
+            cell_range = (
+                gspread.utils.rowcol_to_a1(existing_row_num, start_col)
+                + ":"
+                + gspread.utils.rowcol_to_a1(existing_row_num, end_col)
+            )
+            ws.update(cell_range, [row_values], value_input_option="USER_ENTERED")
+        else:
+            append_payload.append(row_values)
+            append_keys.append(key)
+
+    if append_payload:
+        existing_count = len(ws.get_all_values())
+        ws.append_rows(append_payload, value_input_option="USER_ENTERED")
+        start_row = existing_count + 1
+        for i, key in enumerate(append_keys):
+            row_map[key] = start_row + i
+
+    return row_map
+# def upsert_numerace_user_profile_rows(rows: list[dict]) -> int:
+#     """
+#     Upsert profile rows into numerace_user_profile using the natural key:
+#     username + domain + skill + subskill + mastery_group
+#
+#     Returns number of processed rows.
+#     """
+#     if not rows:
+#         return 0
+#
+#     processed = 0
+#     ts_now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+#
+#     for row in rows:
+#         username = _clean_str(row.get("username", ""))
+#         domain = _clean_str(row.get("domain", ""))
+#         skill = _clean_str(row.get("skill", ""))
+#         subskill = _clean_str(row.get("subskill", ""))
+#         mastery_group = _clean_str(row.get("mastery_group", ""))
+#
+#         if not username:
+#             continue
+#
+#         match_dict = {
+#             "username": username,
+#             "domain": domain,
+#             "skill": skill,
+#             "subskill": subskill,
+#             "mastery_group": mastery_group,
+#         }
+#
+#         row_to_write = {
+#             "timestamp_updated": _clean_str(row.get("timestamp_updated", "")) or ts_now,
+#             "username": username,
+#             "domain": domain,
+#             "skill": skill,
+#             "subskill": subskill,
+#             "mastery_group": mastery_group,
+#             "questions_seen": _to_int(row.get("questions_seen", 0)),
+#             "correct_count": _to_int(row.get("correct_count", 0)),
+#             "missed_count": _to_int(row.get("missed_count", 0)),
+#             "incorrect_count": _to_int(row.get("incorrect_count", 0)),
+#             "accuracy": _to_float(row.get("accuracy", 0.0)),
+#             "avg_response_time": _to_float(row.get("avg_response_time", 0.0)),
+#             "recent_accuracy": _to_float(row.get("recent_accuracy", 0.0)),
+#             "recent_avg_response_time": _to_float(row.get("recent_avg_response_time", 0.0)),
+#             "current_multiplier": _to_float(row.get("current_multiplier", 1.0)),
+#             "recommended_action": _clean_str(row.get("recommended_action", "")),
+#             "last_seen": _clean_str(row.get("last_seen", "")),
+#         }
+#
+#         upsert_row_by_headers("numerace_user_profile", match_dict, row_to_write)
+#         processed += 1
+#
+#     return processed
+
+def get_numerace_attempt_rows_for_group(
+    *,
+    username: str,
+    domain: str,
+    skill: str,
+    subskill: str,
+    mastery_group: str,
+) -> list[dict]:
+    rows = get_numerace_attempt_rows(username=username)
+    return [
+        r for r in rows
+        if _clean_str(r.get("domain", "")) == _clean_str(domain)
+        and _clean_str(r.get("skill", "")) == _clean_str(skill)
+        and _clean_str(r.get("subskill", "")) == _clean_str(subskill)
+        and _clean_str(r.get("mastery_group", "")) == _clean_str(mastery_group)
+    ]
 
 def append_factoring_round(
     *,

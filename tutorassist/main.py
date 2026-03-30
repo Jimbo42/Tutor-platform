@@ -52,39 +52,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-st.markdown("""
-<style>
-/* Darken the main content area slightly so widgets stand out more */
-section.main > div {
-    background: linear-gradient(
-        rgba(6, 12, 22, 0.38),
-        rgba(6, 12, 22, 0.38)
-    );
-    border-radius: 0;
-}
-
-/* Strengthen custom cards/panels */
-div[data-testid="stExpander"],
-div[data-testid="stAlert"] {
-    background-color: rgba(20, 30, 46, 0.78) !important;
-    border: 1px solid rgba(159, 179, 200, 0.28) !important;
-    border-radius: 12px !important;
-}
-
-/* Make text inputs and number inputs stand out a bit more */
-div[data-baseweb="input"] > div,
-div[data-baseweb="base-input"] > div,
-div[data-testid="stTextInput"] input,
-div[data-testid="stNumberInput"] input {
-    background-color: rgba(38, 56, 82, 0.95) !important;
-}
-
-/* Slightly stronger button edge */
-div[data-testid="stButton"] > button {
-    border: 1px solid rgba(159, 179, 200, 0.55) !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ----------------------------
 # Auth helpers
