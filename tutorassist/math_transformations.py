@@ -1,0 +1,3 @@
+from function_transformations import render_function_transformations_page
+
+render_function_transformations_page()

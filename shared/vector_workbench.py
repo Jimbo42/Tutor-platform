@@ -252,6 +252,27 @@ def _apply_vector(key_prefix: str, operation: str):
     ss[f"{key_prefix}_calc_plot_label"] = ""
     ss[f"{key_prefix}_calc_plot_enabled"] = False
 
+def _add_calc_vector_to_history(key_prefix: str):
+    calc_vector = ss.get(f"{key_prefix}_calc_plot_vector")
+    if calc_vector is None:
+        raise ValueError("No calculator vector is available to add.")
+
+    incoming = _to_vector3d(calc_vector)
+    incoming.label = (ss.get(f"{key_prefix}_calc_plot_label", "") or incoming.label or _next_default_label(len(ss.get(f"{key_prefix}_history", [])))).strip()
+
+    current_result = _to_vector3d(ss[f"{key_prefix}_result"])
+    entry = {
+        "operation": "store",
+        "incoming": incoming,
+        "before": current_result,
+        "after": current_result,
+        "plot_start": (0.0, 0.0, 0.0),
+        "plot_mode_override": "anchored",
+    }
+
+    ss[f"{key_prefix}_history"].append(entry)
+    _advance_label_widget(key_prefix)
+
 def _available_vectors(key_prefix: str):
     """
     Returns a list of dicts:
@@ -286,9 +307,8 @@ def _toggle_step_selection(key_prefix: str, step_idx: int):
             return
         selected.append(step_idx)
 
-    selected.sort()
+    # do NOT sort — preserve click order
     ss[f"{key_prefix}_selected_steps"] = selected
-
 
 def _selected_vectors(key_prefix: str):
     selected = ss.get(f"{key_prefix}_selected_steps", [])
@@ -312,8 +332,8 @@ def _run_selected_calc(key_prefix: str, mode: str):
     ss[f"{key_prefix}_calc_mode"] = mode
     _store_calc_result(key_prefix, mode, name1, v1, name2, v2)
 
-def _store_calc_result(key_prefix: str, mode: str, name1: str, v1: Vector3D, name2: str, v2: Vector3D):
 
+def _store_calc_result(key_prefix: str, mode: str, name1: str, v1: Vector3D, name2: str, v2: Vector3D):
     dimension = ss[f"{key_prefix}_dimension"]
 
     if mode == "dot":
@@ -325,7 +345,7 @@ def _store_calc_result(key_prefix: str, mode: str, name1: str, v1: Vector3D, nam
             angle_text = "undefined (zero vector)"
         else:
             cos_theta = dot_val / (mag1 * mag2)
-            cos_theta = max(-1.0, min(1.0, cos_theta))  # clamp for floating-point safety
+            cos_theta = max(-1.0, min(1.0, cos_theta))
             theta_deg = math.degrees(math.acos(cos_theta))
             angle_text = f"{round_clean(theta_deg)}°"
 
@@ -337,7 +357,6 @@ def _store_calc_result(key_prefix: str, mode: str, name1: str, v1: Vector3D, nam
         ss[f"{key_prefix}_calc_plot_vector"] = None
         ss[f"{key_prefix}_calc_plot_label"] = ""
         ss[f"{key_prefix}_calc_plot_enabled"] = False
-
         return
 
     if mode == "cross":
@@ -356,11 +375,36 @@ def _store_calc_result(key_prefix: str, mode: str, name1: str, v1: Vector3D, nam
             ss[f"{key_prefix}_calc_result_text"] = (
                 f"{name1} × {name2} = {vector_to_latex(value, dimension='3D')}"
             )
-
-            # new: store for optional plotting
             ss[f"{key_prefix}_calc_plot_vector"] = value
             ss[f"{key_prefix}_calc_plot_label"] = f"{name1} × {name2}"
             ss[f"{key_prefix}_calc_plot_enabled"] = True
+        return
+
+    if mode == "proj":
+        denom = v2.dot(v2)
+        if abs(denom) < 1e-12:
+            ss[f"{key_prefix}_calc_result_kind"] = "scalar"
+            ss[f"{key_prefix}_calc_result_text"] = (
+                f"Projection undefined: {name2} is the zero vector"
+            )
+            ss[f"{key_prefix}_calc_plot_vector"] = None
+            ss[f"{key_prefix}_calc_plot_label"] = ""
+            ss[f"{key_prefix}_calc_plot_enabled"] = False
+            return
+
+        proj_vec = v2.scale(v1.dot(v2) / denom)
+        scalar_proj = v1.dot(v2) / v2.magnitude
+
+        ss[f"{key_prefix}_calc_result_kind"] = "vector"
+        ss[f"{key_prefix}_calc_result_text"] = (
+            f"Projection of {name1} onto {name2} = {vector_to_latex(proj_vec, dimension=dimension)}"
+            f"   |   scalar = {round_clean(scalar_proj)}"
+        )
+
+        # optional plotting: very useful in both 2D and 3D
+        ss[f"{key_prefix}_calc_plot_vector"] = proj_vec
+        ss[f"{key_prefix}_calc_plot_label"] = f"proj of {name1} onto {name2}"
+        ss[f"{key_prefix}_calc_plot_enabled"] = True
         return
 
 def _prepare_calc(key_prefix: str, mode: str):
@@ -452,11 +496,14 @@ def _should_plot_result(history: list[dict], plot_mode: str) -> bool:
 # plotting
 # =========================================================
 def _plot_vectors_2d(
-    result: Vector3D,
-    history: list[dict],
-    plot_mode: str = "Head-to-tail",
-    title: str = "2D Vector Plot",
+        result: Vector3D,
+        history: list[dict],
+        plot_mode: str = "Head-to-tail",
+        title: str = "2D Vector Plot",
+        calc_plot_vector: Vector3D | None = None,
+        calc_plot_label: str = "",
 ):
+
     mode = (plot_mode or "Head-to-tail").strip().lower()
     show_result = _should_plot_result(history, plot_mode)
 
@@ -464,6 +511,10 @@ def _plot_vectors_2d(
     segments = []
     points_x = [0.0, result.x]
     points_y = [0.0, result.y]
+
+    if calc_plot_vector is not None:
+        points_x.extend([0.0, calc_plot_vector.x])
+        points_y.extend([0.0, calc_plot_vector.y])
 
     if mode == "from origin":
         for item in history:
@@ -691,6 +742,59 @@ def _plot_vectors_2d(
                 mode="text",
                 text=[label_text],
                 textfont=dict(color=label_color, size=label_size),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    if calc_plot_vector is not None:
+        vx, vy = calc_plot_vector.x, calc_plot_vector.y
+        mag = math.hypot(vx, vy)
+        ang = (math.degrees(math.atan2(vy, vx)) + 360) % 360 if mag > 1e-9 else 0.0
+
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0, vx],
+                y=[0.0, vy],
+                mode="lines",
+                line=dict(color="purple", width=3, dash="dot"),
+                hovertemplate=(
+                    f"<b>{calc_plot_label or 'Projection'}</b><br>"
+                    f"Start: (0.000, 0.000)<br>"
+                    f"End: ({vx:.3f}, {vy:.3f})<br>"
+                    f"Components: ({vx:.3f}, {vy:.3f})<br>"
+                    f"Magnitude: {mag:.3f}<br>"
+                    f"Direction: {ang:.3f}°"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+        angle_deg = math.degrees(math.atan2(vy, vx)) if mag > 1e-9 else 0.0
+        fig.add_trace(
+            go.Scatter(
+                x=[vx],
+                y=[vy],
+                mode="markers",
+                marker=dict(
+                    symbol="triangle-up",
+                    size=12,
+                    color="purple",
+                    angle=90 - angle_deg,
+                ),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=[vx],
+                y=[vy],
+                mode="text",
+                text=[calc_plot_label or "Projection"],
+                textfont=dict(color="purple", size=13),
                 hoverinfo="skip",
                 showlegend=False,
             )
@@ -1536,7 +1640,7 @@ def render_vector_workbench(title: str = "Vector Workbench", key_prefix: str = "
 
             st.caption("Choose an action")
 
-            a1, a2, a3, a4, a5 = st.columns([1, 1, 1, 1, 1], gap="small")
+            a1, a2, a3, a4, a5, a6 = st.columns([1, 1, 1, 1, 1, 1], gap="small")
 
             with a1:
                 if st.button(
@@ -1608,40 +1712,78 @@ def render_vector_workbench(title: str = "Vector Workbench", key_prefix: str = "
                     except Exception as e:
                         st.error(str(e))
 
+            with a6:
+                if st.button(
+                    "⟂",
+                    key=f"{key_prefix}_proj_btn",
+                    help="Projection of the first selected vector onto the second selected vector",
+                    width="stretch",
+                    disabled=(panel_mode != "Vector Steps" or not selected_ready),
+                ):
+                    try:
+                        _run_selected_calc(key_prefix, "proj")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+
     calc_text = ss.get(f"{key_prefix}_calc_result_text", "").strip()
     if calc_text:
         st.markdown("#### Calculator Result")
         with st.container(border=True):
-            if ss.get(f"{key_prefix}_calc_result_kind") == "vector":
-                st.latex(calc_text.split("=", 1)[1].strip())
-                st.caption(calc_text.split("=", 1)[0].strip())
+            if ss.get(f"{key_prefix}_calc_result_kind") == "vector" and "=" in calc_text:
+                left_text, right_text = calc_text.split("=", 1)
+                if "|" in right_text:
+                    vec_text, extra_text = right_text.split("|", 1)
+                    st.caption(left_text.strip())
+                    st.latex(vec_text.strip())
+                    st.markdown(extra_text.strip())
+                else:
+                    st.caption(left_text.strip())
+                    st.latex(right_text.strip())
             else:
                 st.markdown(calc_text)
 
-            if (
-                    ss.get(f"{key_prefix}_dimension") == "3D"
-                    and ss.get(f"{key_prefix}_calc_plot_vector") is not None
-            ):
+            if ss.get(f"{key_prefix}_calc_plot_vector") is not None:
+                plot_label = "Plot calculator vector"
+                if ss.get(f"{key_prefix}_calc_mode") == "cross":
+                    plot_label = "Plot cross product"
+                elif ss.get(f"{key_prefix}_calc_mode") == "proj":
+                    plot_label = "Plot projection"
+
                 st.checkbox(
-                    "Plot cross product",
+                    plot_label,
                     key=f"{key_prefix}_calc_plot_enabled",
                 )
 
+                if ss.get(f"{key_prefix}_calc_plot_enabled"):
+                    add_label = "Add resultant vector to list"
+                    if ss.get(f"{key_prefix}_calc_mode") == "proj":
+                        add_label = "Add projection vector to list"
+
+                    if st.button(
+                        add_label,
+                        key=f"{key_prefix}_add_calc_vector_btn",
+                        width="stretch",
+                    ):
+                        try:
+                            _add_calc_vector_to_history(key_prefix)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+
     st.markdown("#### Vector Plot")
 
+    calc_plot_vector = None
+    calc_plot_label = ""
+
+    if (
+        ss.get(f"{key_prefix}_calc_plot_enabled")
+        and ss.get(f"{key_prefix}_calc_plot_vector") is not None
+    ):
+        calc_plot_vector = ss[f"{key_prefix}_calc_plot_vector"]
+        calc_plot_label = ss.get(f"{key_prefix}_calc_plot_label", "")
+
     if ss[f"{key_prefix}_dimension"] == "3D":
-
-        calc_plot_vector = None
-        calc_plot_label = ""
-
-        if (
-                ss[f"{key_prefix}_dimension"] == "3D"
-                and ss.get(f"{key_prefix}_calc_plot_enabled")
-                and ss.get(f"{key_prefix}_calc_plot_vector") is not None
-        ):
-            calc_plot_vector = ss[f"{key_prefix}_calc_plot_vector"]
-            calc_plot_label = ss.get(f"{key_prefix}_calc_plot_label", "")
-
         fig = _plot_vectors_3d(
             result=result,
             history=history,
@@ -1650,14 +1792,16 @@ def render_vector_workbench(title: str = "Vector Workbench", key_prefix: str = "
             calc_plot_vector=calc_plot_vector,
             calc_plot_label=calc_plot_label,
         )
-
     else:
         fig = _plot_vectors_2d(
             result=result,
             history=history,
             plot_mode=ss[f"{key_prefix}_plot_mode"],
             title="2D Vector Plot",
+            calc_plot_vector=calc_plot_vector,
+            calc_plot_label=calc_plot_label,
         )
 
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
 

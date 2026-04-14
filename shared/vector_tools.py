@@ -104,6 +104,20 @@ class Vector3D:
             self.x * other.y - self.y * other.x,
         )
 
+    def projection_onto(self, other: "Vector3D") -> "Vector3D":
+        denom = other.dot(other)
+        if abs(denom) < 1e-12:
+            return Vector3D(0.0, 0.0, 0.0, label="proj(0)")
+        scale = self.dot(other) / denom
+        return other.scale(scale)
+
+    def scalar_projection_onto(self, other: "Vector3D") -> float:
+        mag = other.magnitude
+        if mag < 1e-12:
+            return 0.0
+        return self.dot(other) / mag
+
+
 def round_clean(value: float, places: int = 3) -> str:
     s = f"{value:.{places}f}"
     s = s.rstrip("0").rstrip(".")

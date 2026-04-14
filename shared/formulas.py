@@ -72,10 +72,23 @@ def load_formulas(category=None):
     conn.close()
     return df
 
+import re
+
+def normalize_latex_for_parser(latex: str) -> str:
+    if not latex:
+        return ""
+
+    s = latex.strip()
+
+    # Insert explicit multiplication between a variable and an opening bracket
+    # Example: P_v(1+r)^t  ->  P_v*(1+r)^t
+    s = re.sub(r'([A-Za-z][A-Za-z0-9_]*)(\s*)\(', r'\1*\(', s)
+
+    return s
+
 def extract_symbols_from_latex(latex):
     try:
-        from sympy.parsing.latex import parse_latex
-        expr = parse_latex(latex)
+        expr = parse_latex(normalize_latex_for_parser(latex))
         return sorted({normalize_symbol_name(s.name) for s in expr.free_symbols})
     except:
         return []
@@ -462,7 +475,7 @@ def show_formula_solver(row):
 
     # ---------- Parse formula ----------
     try:
-        expr = parse_latex(row["latex"])
+        expr = parse_latex(normalize_latex_for_parser(row["latex"]))
     except Exception as e:
         st.error("Could not parse formula.")
         st.exception(e)
@@ -604,7 +617,7 @@ def show_formula_solver(row):
 
 def solve_formula(latex_str, known_values):
 
-    expr = parse_latex(latex_str)
+    expr = parse_latex(normalize_latex_for_parser(latex_str))
 
     if not hasattr(expr, "lhs"):
         raise ValueError("Formula must be an equation")
@@ -658,6 +671,25 @@ def solve_formula(latex_str, known_values):
 
 def show_formulas():
 
+    st.markdown("""
+    <style>
+    .formula-toolbar {
+        position: sticky;
+        top: 0.5rem;
+        z-index: 999;
+        background: rgba(240, 247, 255, 0.96);
+        backdrop-filter: blur(6px);
+        padding: 0.5rem 0 0.75rem 0;
+        border-bottom: 1px solid rgba(120, 140, 170, 0.18);
+        margin-bottom: 0.75rem;
+    }
+
+    .formula-toolbar-spacer {
+        height: 0.25rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     if "formula_pdf_path" not in ss:
         ss.formula_pdf_path = None
 
@@ -670,7 +702,9 @@ def show_formulas():
 
     # ---------------- Top controls ----------------
 
-    col_1, col_2, col_3 = st.columns([2, 2, 1])
+    st.markdown('<div class="formula-toolbar">', unsafe_allow_html=True)
+
+    col_1, col_2, col_3, col_4 = st.columns([2, 2, 0.7, 0.7])
 
     with col_1:
         categories = get_categories()
@@ -685,37 +719,42 @@ def show_formulas():
     df = load_formulas(category)
 
     with col_2:
-        search = st.text_input("🔍 Search formulas by title", placeholder="e.g. energy, velocity, lens...")
+        search = st.text_input(
+            "🔍 Search formulas by title",
+            placeholder="e.g. energy, velocity, lens..."
+        )
         if search.strip():
             df = df[df["title"].str.contains(search, case=False, na=False)]
 
     with col_3:
         if not READ_ONLY_MODE:
+            st.write("")  # slight vertical alignment help
             if st.button("➕", key="formula_editor", help="Add New Formula"):
                 formula_editor()
 
-    # ---------------- PDF Export ----------------
+    with col_4:
+        st.write("")  # slight vertical alignment help
+        if st.button("📄", key="pdf_export", help="Export formulas to PDF"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_path = PDF_DIR / f"formulas_export_{timestamp}.pdf"
 
-    if st.button("📄", key="pdf_export", help="Export formulas to PDF"):
-        output_dir = "saved_files"
-        ensure_dir(output_dir)
+            clear_latex_cache()
+            generate_formula_pdf(df, pdf_path)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        pdf_path = PDF_DIR / f"formulas_export_{timestamp}.pdf"
-
-        clear_latex_cache()
-        generate_formula_pdf(df, pdf_path)
-
-        ss.formula_pdf_path = pdf_path
+            ss.formula_pdf_path = pdf_path
 
     if ss.formula_pdf_path:
         with open(ss.formula_pdf_path, "rb") as f:
             st.download_button(
                 "⬇️ Download PDF",
                 f,
-                file_name=ss.formula_pdf_path,
-                mime="application/pdf"
+                file_name=ss.formula_pdf_path.name,
+                mime="application/pdf",
+                width="stretch"
             )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="formula-toolbar-spacer"></div>', unsafe_allow_html=True)
 
     # ---------------- Cards ----------------
 
@@ -749,8 +788,7 @@ def show_formulas():
                                 if not isinstance(parsed_units, dict):
                                     raise ValueError("Units not dict")
 
-                                from sympy.parsing.latex import parse_latex
-                                expr = parse_latex(row["latex"])
+                                expr = parse_latex(normalize_latex_for_parser(row["latex"]))
 
                                 symbols = {normalize_symbol_name(s.name) for s in expr.free_symbols}
                                 missing_units = [s for s in symbols if s not in parsed_units]
