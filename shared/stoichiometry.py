@@ -72,6 +72,7 @@ def compact_field(label: str, key: str, value, *,
         key=key,
         placeholder=placeholder,
         help=help_msg,
+        autocomplete=None,
         label_visibility="collapsed",
         disabled=disabled,
         on_change=on_change,
@@ -275,6 +276,7 @@ def stoich_calculator():
 
     with fc1:
         formula = st.text_input("Formula",
+                                autocomplete=None,
                     key="chem_formula",
                     placeholder="Formula",
                     on_change=check_formula,

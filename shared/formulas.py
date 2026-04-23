@@ -126,8 +126,8 @@ def formula_editor():
 
     with st.form("formula_editor", clear_on_submit=False):
 
-        category = st.text_input("Category")
-        title = st.text_input("Formula name")
+        category = st.text_input("Category", autocomplete=None)
+        title = st.text_input("Formula name", autocomplete=None)
 
         latex = st.text_area("LaTeX Formula", height=120)
         description = st.text_area("Description / variable definitions")
@@ -175,8 +175,8 @@ def edit_formula_editor(row):
 
     with st.form("edit_formula"):
 
-        category = st.text_input("Category", value=row["category"])
-        title = st.text_input("Formula name", value=row["title"])
+        category = st.text_input("Category", value=row["category"], autocomplete=None)
+        title = st.text_input("Formula name", value=row["title"], autocomplete=None)
         latex = st.text_area("LaTeX Formula", value=row["latex"], height=120)
         description = st.text_area("Description", value=row["description"])
 
@@ -542,7 +542,8 @@ def show_formula_solver(row):
             val = st.text_input(
                 label,
                 value=default_value,
-                key=f"solver_val_{row['id']}_{name}"
+                key=f"solver_val_{row['id']}_{name}",
+                autocomplete=None,
             )
 
             if const_info:
@@ -714,7 +715,7 @@ def show_formulas():
         )
 
         if category == "➕ New category":
-            category = st.text_input("New category name")
+            category = st.text_input("New category name", autocomplete=None)
 
     df = load_formulas(category)
 

@@ -227,9 +227,9 @@ def render_field(field, key_prefix="tpl_"):
 
     if ftype == "text":
         if has_state:
-            return st.text_input(label, key=k)
+            return st.text_input(label, key=k, autocomplete=None)
         else:
-            return st.text_input(label, value=str(default), key=k)
+            return st.text_input(label, value=str(default), key=k, autocomplete=None)
 
     if ftype == "textarea":
         if has_state:
@@ -270,9 +270,9 @@ def render_field(field, key_prefix="tpl_"):
 
     # fallback
     if has_state:
-        return st.text_input(label, key=k)
+        return st.text_input(label, key=k, autocomplete=None)
     else:
-        return st.text_input(label, value=str(default), key=k)
+        return st.text_input(label, value=str(default), key=k, autocomplete=None)
 
 def fill_prompt(prompt: str, values: dict) -> str:
     out = prompt
@@ -896,12 +896,12 @@ def edit_save_dialog():
         default_title = "Study Notes"
         if is_interactive and isinstance(last, dict) and isinstance(last.get("title"), str) and last["title"].strip():
             default_title = last["title"].strip()
-        title = st.text_input("Title", value=default_title)
+        title = st.text_input("Title", value=default_title, autocomplete=None)
 
     with c2:
-        subject = st.text_input("Subject", value="Math")
+        subject = st.text_input("Subject", value="Math", autocomplete=None)
     with c3:
-        grade = st.text_input("Grade", value="All")
+        grade = st.text_input("Grade", value="All", autocomplete=None)
 
     make_public_flag = st.checkbox("Make file accessible to anyone with the link", value=True)
 

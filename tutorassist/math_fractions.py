@@ -1,0 +1,3 @@
+from fraction_practice import render_fraction_visual_practice
+
+render_fraction_visual_practice()

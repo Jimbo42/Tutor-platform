@@ -328,7 +328,7 @@ def render_interactive_questions(data, *, ws_key: str = ""):
                     key=w_key,
                 )
         else:
-            user_ans = st.text_input("Your answer:", key=w_key)
+            user_ans = st.text_input("Your answer:", key=w_key, autocomplete=None)
 
     # Actions
     a1, a2, a3, a4 = st.columns([1, 1, 1, 1])
@@ -656,7 +656,7 @@ def render_matching_exercise(data: dict, *, ws_key: str = ""):
                     label_visibility="collapsed",
                     max_chars=1,
                     placeholder="",
-                    autocomplete="off",
+                    autocomplete=None,
                     disabled=bool(state.get("submitted")),
                     on_change=_on_letter_change,
                     args=(i,),

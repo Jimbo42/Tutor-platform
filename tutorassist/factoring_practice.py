@@ -1516,7 +1516,7 @@ def factoring_practice():
     user_answer = st.text_input(
         "Your answer",
         key=f"fact_answer_box_{ss.fact_input_version}",
-        autocomplete="off",
+        autocomplete=None,
         label_visibility="collapsed",
     )
 

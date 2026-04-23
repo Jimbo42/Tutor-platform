@@ -117,6 +117,7 @@ pages = {
     ],
     "Math Skills Challenges": [
         st.Page("math_numeracy.py", title="NumerAce"),
+        st.Page("math_fractions.py", title="Fraction Practice"),
         st.Page("math_factoring.py", title="Factoring"),
         st.Page("math_equations.py", title="Solving Equations"),
         st.Page("math_transformations.py", title="Function Transformations"),

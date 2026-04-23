@@ -1297,7 +1297,7 @@ def solving_equations_practice():
                 "Left operation",
                 key=left_key,
                 label_visibility="collapsed",
-                autocomplete="off",
+                autocomplete=None,
                 disabled=middle_has_text,
             )
 
@@ -1306,7 +1306,7 @@ def solving_equations_practice():
                 "Next equation",
                 key=mid_key,
                 label_visibility="collapsed",
-                autocomplete="off",
+                autocomplete=None,
                 disabled=side_has_text,
             )
 
@@ -1315,7 +1315,7 @@ def solving_equations_practice():
                 "Right operation",
                 key=right_key,
                 label_visibility="collapsed",
-                autocomplete="off",
+                autocomplete=None,
                 disabled=middle_has_text,
             )
 

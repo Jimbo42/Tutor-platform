@@ -221,9 +221,9 @@ def edit_chattemplate_dialog(tpl: dict, mode: str = "edit"):
     st.markdown("### ChatTemplate Editor")
 
     # Defaults
-    title = st.text_input("Title", value=tpl.get("title", ""))
-    category = st.text_input("Category", value=tpl.get("category", "") or "")
-    model = st.text_input("Model", value=tpl.get("model", "gpt-4o-mini"))
+    title = st.text_input("Title", value=tpl.get("title", ""), autocomplete=None)
+    category = st.text_input("Category", value=tpl.get("category", "") or "", autocomplete=None)
+    model = st.text_input("Model", value=tpl.get("model", "gpt-4o-mini"), autocomplete=None)
 
     st.divider()
 
@@ -651,7 +651,7 @@ elif ss.configMode == "Shortcodes":
         code_to_edit = ss.editing_code
         st.subheader(f"Edit Shortcode: {code_to_edit}")
 
-        new_phrase = st.text_input("Phrase", value=shortcodes[code_to_edit])
+        new_phrase = st.text_input("Phrase", value=shortcodes[code_to_edit], autocomplete=None)
         if st.button("Save Changes"):
             shortcodes[code_to_edit] = new_phrase
             save_shortcodes(shortcodes)
@@ -665,8 +665,8 @@ elif ss.configMode == "Shortcodes":
     # --- Add New Shortcode ---
     st.subheader("Add New Shortcode")
 
-    new_code = st.text_input("Shortcode (e.g., 'wits')", key="new_shortcode")
-    new_phrase = st.text_input("Full Phrase", key="new_phrase")
+    new_code = st.text_input("Shortcode (e.g., 'wits')", key="new_shortcode", autocomplete=None)
+    new_phrase = st.text_input("Full Phrase", key="new_phrase", autocomplete=None)
 
     if st.button("Add Shortcode"):
         if new_code.strip() == "" or new_phrase.strip() == "":
@@ -719,4 +719,4 @@ elif ss.configMode == "Numeracy Admin":
 
 elif ss.configMode == "User/Password":
     from shared.auth import hash_password
-    print(hash_password(st.text_input("Password", type="password")))
+    print(hash_password(st.text_input("Password", type="password", autocomplete=None)))

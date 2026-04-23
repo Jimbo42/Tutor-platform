@@ -361,7 +361,7 @@ def summarize_lesson():
 #  Dialog Boxes
 @st.dialog("Add Student")
 def add_new_student():
-    student_name = st.text_input("Student Name")
+    student_name = st.text_input("Student Name", autocomplete=None)
     if st.button("Submit"):
         dateToday = date.today().strftime('%Y-%m-%d %H:%M')
         conn_a = get_conn()
@@ -416,7 +416,7 @@ def apply_student_selection():
 
 @st.dialog("Add lesson")
 def add_new_lesson():
-    lesson_goal = st.text_input("Lesson Goals")
+    lesson_goal = st.text_input("Lesson Goals", autocomplete=None)
     if st.button("Submit"):
         ss.lesson_goal = lesson_goal
         add_lesson()
@@ -425,7 +425,7 @@ def add_new_lesson():
 
 @st.dialog("Add Book")
 def add_new_book():
-    new_book = st.text_input("Book Name")
+    new_book = st.text_input("Book Name", autocomplete=None)
     if st.button("Add Book"):
         ss.new_book = new_book
         add_book()
@@ -553,7 +553,7 @@ if ss.edit_student:
 
     num_lessons = len(ss.lesson_data)
 
-    q_input = st.text_input("Quick Add:", key="q_input", on_change=add_q_note)
+    q_input = st.text_input("Quick Add:", key="q_input", on_change=add_q_note, autocomplete=None)
 
     with st.expander("🔤 Quick Note Codes"):
         shortcodes = load_shortcodes()
@@ -611,8 +611,8 @@ if ss.edit_student:
 
     with st.form("Lesson Notes"):
         ss.rowID = ss.lesson_data[ss.lesson_number][8]
-        lesson_goals = st.text_input("Lesson Goals:", ss.lesson_data[ss.lesson_number][2])
-        exercises = st.text_input("Exercises:", ss.lesson_data[ss.lesson_number][7])
+        lesson_goals = st.text_input("Lesson Goals:", ss.lesson_data[ss.lesson_number][2], autocomplete=None)
+        exercises = st.text_input("Exercises:", ss.lesson_data[ss.lesson_number][7], autocomplete=None)
         daily_note = st.text_area("Daily Notes:", ss.lesson_data[ss.lesson_number][0])
         quick_notes = st.text_area("Quick Notes:", ss.lesson_data[ss.lesson_number][3])
 
@@ -621,10 +621,10 @@ if ss.edit_student:
 
     with (st.expander("", expanded=not ss.edit_details, icon="🐋")):
         with st.form("Student Details"):
-            course_goals = st.text_input("Course Goals", ss.student_data[0][0])
+            course_goals = st.text_input("Course Goals", ss.student_data[0][0], autocomplete=None)
             notes = st.text_area("Notes", ss.student_data[0][1])
-            oxford_link = st.text_input("Oxford Link", ss.student_data[0][2])
-            slug = st.text_input("Update Required:", ss.student_data[0][3])
+            oxford_link = st.text_input("Oxford Link", ss.student_data[0][2], autocomplete=None)
+            slug = st.text_input("Update Required:", ss.student_data[0][3], autocomplete=None)
 
             if st.form_submit_button("Save Details", disabled=ss.edit_details):
                 update_student_data(course_goals, notes, oxford_link, slug)

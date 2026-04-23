@@ -244,7 +244,7 @@ def dlg_edit_question(game: dict, qdef: dict):
 
     # ---------------- BASICS ----------------
     with tabs[0]:
-        qdef["title"] = st.text_input("Title", qdef["title"], key=f"{ns}_title")
+        qdef["title"] = st.text_input("Title", qdef["title"], key=f"{ns}_title", autocomplete=None)
         qdef["difficulty"] = st.selectbox(
             "Difficulty",
             SUPPORTED_DIFFICULTIES,
@@ -340,7 +340,7 @@ def dlg_edit_question(game: dict, qdef: dict):
         vars_dict = qdef["vars"]
 
         st.subheader("Add var")
-        new_name = st.text_input("New var name", "", key=f"{ns}_v_new").strip()
+        new_name = st.text_input("New var name", "", key=f"{ns}_v_new", autocomplete=None).strip()
         kind = st.selectbox("Type", SUPPORTED_VAR_KINDS, key=f"{ns}_v_kind")
 
         if kind == "int":
@@ -357,7 +357,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                     _dirty()
                     st.rerun()
         else:
-            vals = st.text_input("values CSV", "1,2,3", key=f"{ns}_v_vals")
+            vals = st.text_input("values CSV", "1,2,3", key=f"{ns}_v_vals", autocomplete=None)
             if st.button("Add var", key=f"{ns}_v_add_choice"):
                 if not new_name:
                     st.error("Name required.")
@@ -388,7 +388,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                     st.rerun()
             else:
                 csv = ",".join(str(v) for v in spec.get("values", []))
-                csv2 = st.text_input("values CSV", csv, key=f"{ns}_v_e_vals_{pick}")
+                csv2 = st.text_input("values CSV", csv, key=f"{ns}_v_e_vals_{pick}", autocomplete=None)
                 if st.button("Apply", key=f"{ns}_v_apply2_{pick}"):
                     vars_dict[pick] = {"kind": "choice", "values": _as_float_list(csv2)}
                     _dirty()
@@ -405,7 +405,7 @@ def dlg_edit_question(game: dict, qdef: dict):
         derived = qdef["derived"]
 
         st.subheader("Add derived")
-        d_name = st.text_input("Derived name", "", key=f"{ns}_d_new").strip()
+        d_name = st.text_input("Derived name", "", key=f"{ns}_d_new", autocomplete=None).strip()
         mode = st.radio("Mode", ["sampler", "expression"], horizontal=True, key=f"{ns}_d_mode")
 
         if mode == "expression":
@@ -428,7 +428,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                     _dirty()
                     st.rerun()
         else:
-            vals = st.text_input("values CSV", "1,2,3", key=f"{ns}_d_vals")
+            vals = st.text_input("values CSV", "1,2,3", key=f"{ns}_d_vals", autocomplete=None)
             if st.button("Add derived", key=f"{ns}_d_add_sampler_btn"):
                 if not d_name:
                     st.error("Name required.")
@@ -452,7 +452,7 @@ def dlg_edit_question(game: dict, qdef: dict):
             # keys include dpick so selection refresh works
             if isinstance(cur, dict) and "kind" in cur:
                 csv = ",".join(str(v) for v in cur.get("values", []))
-                csv2 = st.text_input("values CSV", csv, key=f"{ns}_d_e_vals_{dpick}")
+                csv2 = st.text_input("values CSV", csv, key=f"{ns}_d_e_vals_{dpick}", autocomplete=None)
                 if st.button("Apply", key=f"{ns}_d_apply_{dpick}"):
                     derived[dpick] = {"kind": "choice", "values": _as_float_list(csv2)}
                     _dirty()
@@ -557,6 +557,7 @@ def dlg_edit_question(game: dict, qdef: dict):
                         "label",
                         value=it.get("label", chr(ord("A") + idx)),
                         key=f"{ns}_c_lab_{idx}",
+                        autocomplete=None,
                     )
 
                     # value editor: prefer $ref dropdown, with optional raw override
@@ -589,7 +590,8 @@ def dlg_edit_question(game: dict, qdef: dict):
                                 "value (raw)",
                                 value=str(val),
                                 key=f"{ns}_c_raw_{idx}",
-                                help="Use $name for refs. Advanced: paste JSON to create expressions."
+                                help="Use $name for refs. Advanced: paste JSON to create expressions.",
+                                autocomplete=None,
                             )
 
                     if st.button("Delete item", key=f"{ns}_c_del_{idx}", type="secondary"):
@@ -615,8 +617,8 @@ def dlg_edit_question(game: dict, qdef: dict):
 
         else:
             # keep your existing two_decimal_one_distractor UI (with n_distractors)
-            exact = st.text_input("exact ($ref)", value=ch.get("exact", "$exact"), key=f"{ns}_c_exact")
-            delta = st.text_input("delta ($ref)", value=ch.get("delta", "$delta"), key=f"{ns}_c_delta")
+            exact = st.text_input("exact ($ref)", value=ch.get("exact", "$exact"), key=f"{ns}_c_exact", autocomplete=None)
+            delta = st.text_input("delta ($ref)", value=ch.get("delta", "$delta"), key=f"{ns}_c_delta", autocomplete=None)
             places = st.number_input(
                 "Choice decimal places (round_places)",
                 0, 6,
@@ -1020,6 +1022,7 @@ def render_expr_builder_inline(
                 value=init_lit,
                 key=f"{namespace}_lit_{i}",
                 disabled=(mode != "literal"),
+                autocomplete=None,
             )
 
         try:
